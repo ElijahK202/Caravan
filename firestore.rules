@@ -1,0 +1,90 @@
+rules_version = '2';
+
+// Caravan access rules.
+// Payments are still in test mode: escrow amounts are written by the browser.
+// Before real money moves, fund/release/refund must move to Cloud Functions
+// and the money fields below must become read-only for clients.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function me() { return request.auth.uid; }
+    function isSample(id) { return id.matches('sample-.*'); }
+    function task(id) { return get(/databases/$(database)/documents/tasks/$(id)).data; }
+
+    // Public profiles. Emails are kept out of these and stored under /data/users.
+    match /agents/{uid} {
+      allow read: if true;
+      allow write: if signedIn() && me() == uid;
+    }
+    match /clients/{uid} {
+      allow read: if true;
+      allow write: if signedIn() && me() == uid;
+    }
+
+    // Tasks are a public job board. Only the client creates or cancels; the hired agent can accept or decline.
+    match /tasks/{taskId} {
+      allow read: if true;
+      allow create: if signedIn() && request.resource.data.clientId == me();
+      allow update: if signedIn()
+        && request.resource.data.clientId == resource.data.clientId
+        && (resource.data.clientId == me() || resource.data.agentId == me());
+      allow delete: if false;
+    }
+
+    match /applications/{appId} {
+      allow read: if signedIn() && (resource.data.agentId == me() || resource.data.clientId == me());
+      allow create: if signedIn() && request.resource.data.agentId == me()
+        && appId == request.resource.data.taskId + '__' + me()
+        && task(request.resource.data.taskId).status == 'open';
+      allow delete: if signedIn() && resource.data.agentId == me();
+      allow update: if false;
+    }
+
+    match /reviews/{taskId} {
+      allow read: if true;
+      allow write: if signedIn() && request.resource.data.clientId == me()
+        && task(taskId).clientId == me()
+        && request.resource.data.agentId == task(taskId).agentId;
+    }
+
+    match /threads/{threadId} {
+      allow read: if signedIn() && me() in resource.data.participants;
+      allow create: if signedIn() && me() in request.resource.data.participants
+        && threadId == request.resource.data.clientId + '__' + request.resource.data.agentId;
+      allow update: if signedIn() && me() in resource.data.participants
+        && request.resource.data.participants == resource.data.participants;
+    }
+
+    match /messages/{msgId} {
+      allow read: if signedIn() && me() in resource.data.participants;
+      allow create: if signedIn() && me() in request.resource.data.participants
+        && (request.resource.data.from == me() || request.resource.data.from == 'system');
+    }
+
+    // Logged hours: the agent submits, the client approves or rejects.
+    // A client may log hours for a sample agent to try the approval flow.
+    match /hours/{hourId} {
+      allow read: if signedIn() && (resource.data.agentId == me() || resource.data.clientId == me());
+      allow create: if signedIn() && task(request.resource.data.taskId).clientId == request.resource.data.clientId
+        && task(request.resource.data.taskId).agentId == request.resource.data.agentId
+        && (request.resource.data.agentId == me()
+            || (request.resource.data.clientId == me() && isSample(request.resource.data.agentId)))
+        && request.resource.data.status == 'pending';
+      allow update: if signedIn() && resource.data.clientId == me()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'decidedAt']);
+    }
+
+    // Escrow history. Written by the client's browser while payments are in test mode.
+    match /ledger/{entryId} {
+      allow read: if signedIn() && (resource.data.agentId == me() || resource.data.clientId == me());
+      allow create: if signedIn() && request.resource.data.clientId == me()
+        && task(request.resource.data.taskId).clientId == me();
+    }
+
+    // Private per-user data: email, favorites, blocked agents, default payment method.
+    match /data/users/{uid}/{docId} {
+      allow read, write: if signedIn() && me() == uid;
+    }
+  }
+}

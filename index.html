@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Caravan — real people, real help, from anywhere</title>
+<meta name="description" content="Caravan connects busy people and small businesses with trusted remote human assistants, at a fair price for both sides.">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+</head>
+<body>
+<header id="hdr">
+  <div class="wrap nav">
+    <button class="brand" data-go="home" aria-label="Caravan home">
+      <svg viewBox="0 0 38 20" fill="none" aria-hidden="true"><path d="M2 18 C 8 2, 30 2, 36 18" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
+      CARAVAN
+    </button>
+    <nav class="navlinks" id="navlinks" aria-label="Main"></nav>
+    <div class="navright">
+      <div class="roleswitch sm" id="actAs" role="group" aria-label="Using Caravan as" hidden>
+        <button type="button" data-act-as="client">Client</button>
+        <button type="button" data-act-as="agent">Agent</button>
+      </div>
+      <span class="btnrow" id="authBtns"></span>
+      <button class="menubtn" id="menuBtn" type="button" aria-expanded="false" aria-controls="navlinks">Menu</button>
+    </div>
+  </div>
+</header>
+
+<main>
+<!-- HOME -->
+<div id="view-home">
+  <div class="wrap hero">
+    <div>
+      <p class="kicker">Remote assistants in 120 time zones, ready when you aren't.</p>
+      <h1><span>Real people.</span><span>Real help.</span><span>From anywhere.</span></h1>
+      <p class="lede">Caravan connects busy people and small businesses with trusted human assistants who handle the everyday work — inbox, research, scheduling, data entry — at a fair price for both sides.</p>
+      <div class="ctas">
+        <button class="btn primary" data-go="agents">Find an agent
+          <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 8h10M9 4l4 4-4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+        <button class="btn ghost" data-go="register" data-role="agent">Work as an agent</button>
+      </div>
+    </div>
+    <div class="globebox">
+      <canvas id="globe" aria-label="A rotating globe with lines connecting clients and agents across continents" role="img"></canvas>
+      <div class="rates" id="rates" aria-hidden="true"></div>
+    </div>
+  </div>
+
+  <section class="band" id="how">
+    <div class="wrap">
+      <h2>How Caravan works</h2>
+      <p class="sub">Both sides sign up, say what they need or offer, and we match them on skills, language and price. Money sits in escrow until the work is approved.</p>
+      <div class="steps">
+        <div class="step"><div class="n">1</div><h3>Create a profile</h3><p>Clients describe the work and budget. Agents list their skills, languages and hourly rate.</p></div>
+        <div class="step"><div class="n">2</div><h3>Post and match</h3><p>Post a task and see ranked matches, or browse the directory and hire someone directly.</p></div>
+        <div class="step"><div class="n">3</div><h3>Fund escrow</h3><p>Pay into escrow by card, PayPal, bank, local wallet or crypto. The agent can see the work is funded.</p></div>
+        <div class="step"><div class="n">4</div><h3>Approve hours</h3><p>Agents log hours. Each approval releases pay; unused funds come back to you.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="band">
+    <div class="wrap split">
+      <div class="path">
+        <h3>I need help</h3>
+        <p>For founders, professionals and families who want their time back.</p>
+        <ul><li>Post a task and get ranked matches</li><li>See a price estimate before you commit</li><li>Rehire the agents you liked, end contracts that aren't working</li></ul>
+        <button class="btn primary" data-go="register" data-role="client">Register as a client</button>
+      </div>
+      <div class="path">
+        <h3>I want to work</h3>
+        <p>For people with a computer, a reliable connection and skills to offer.</p>
+        <ul><li>Set your own rate in US dollars and keep all of it</li><li>Apply to tasks that match your skills</li><li>Get paid by PayPal, Wise, mobile money or crypto</li></ul>
+        <button class="btn ghost" data-go="register" data-role="agent">Register as an agent</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="band">
+    <div class="wrap closing">
+      <h2>You don’t have to be in Manhattan to get things done.</h2>
+      <div class="btnrow">
+        <button class="btn primary" data-go="register" data-role="client">Get started</button>
+        <button class="btn ghost" data-go="pricing">See pricing</button>
+      </div>
+    </div>
+  </section>
+</div>
+
+<!-- REGISTER -->
+<div id="view-register" hidden>
+  <section class="band" style="border-top:0">
+    <div class="wrap">
+      <div class="formhead">
+        <div>
+          <h2 id="regTitle">Register as a client</h2>
+          <p class="sub" id="regSub" style="margin:0">Tell agents where you are and what you need done.</p>
+        </div>
+        <div class="roleswitch" role="group" aria-label="Account type">
+          <button type="button" data-role-btn="client" aria-pressed="true">I need help</button>
+          <button type="button" data-role-btn="agent" aria-pressed="false">I want to work</button>
+        </div>
+      </div>
+
+      <!-- CLIENT FORM -->
+      <form id="form-client" class="reg" novalidate>
+        <fieldset>
+          <div class="legendcol"><legend>About you</legend><p>Shown to agents you match with.</p></div>
+          <div class="fields">
+            <div><label for="c_name">Full name</label><input type="text" id="c_name" name="name" required autocomplete="name"><div class="err">Enter your name.</div></div>
+            <div><label for="c_email">Email</label><input type="email" id="c_email" name="email" required autocomplete="email"><div class="err">Enter a valid email address.</div></div>
+            <div class="full"><label>Account type</label>
+              <div class="seg">
+                <label class="chip"><input type="radio" name="accountType" value="Individual" checked><span>Individual</span></label>
+                <label class="chip"><input type="radio" name="accountType" value="Business"><span>Business</span></label>
+              </div></div>
+            <div class="full" data-biz hidden><label for="c_company">Company name</label><input type="text" id="c_company" name="company" autocomplete="organization"></div>
+          </div>
+        </fieldset>
+        <fieldset>
+          <div class="legendcol"><legend>Location</legend><p>Used to match agents whose hours suit yours.</p></div>
+          <div class="fields">
+            <div><label for="c_country">Country</label><select id="c_country" name="country" required data-countries></select><div class="err">Choose your country.</div></div>
+            <div><label for="c_city">City</label><input type="text" id="c_city" name="city" required autocomplete="address-level2"><div class="err">Enter your city.</div></div>
+            <div class="full"><label for="c_tz">Time zone</label><select id="c_tz" name="timezone" data-tz></select></div>
+          </div>
+        </fieldset>
+        <fieldset>
+          <div class="legendcol"><legend>What you need</legend><p>Pick every kind of task you'd hand off.</p></div>
+          <div class="fields">
+            <div class="full" data-group="tasks"><label>Tasks</label><div class="chips" data-tasks="tasks"></div><div class="err">Pick at least one task.</div></div>
+            <div class="full"><label for="c_desc">Describe the work</label><textarea id="c_desc" name="description" placeholder="e.g. Sort my inbox each morning, draft replies to supplier emails, and flag anything urgent."></textarea></div>
+            <div class="full" data-group="langs"><label>Languages the agent should speak</label><div class="chips" data-langs="languages"></div><div class="err">Pick at least one language.</div></div>
+          </div>
+        </fieldset>
+        <fieldset>
+          <div class="legendcol"><legend>Budget and hours</legend><p>Agents see this before accepting work.</p></div>
+          <div class="fields">
+            <div data-group="budget"><label>Hourly budget (USD)</label>
+              <div class="range2"><div class="money"><input type="number" name="budgetMin" min="1" step="0.5" value="4" aria-label="Minimum hourly budget"></div><span>to</span><div class="money"><input type="number" name="budgetMax" min="1" step="0.5" value="10" aria-label="Maximum hourly budget"></div></div>
+              <div class="err">Maximum must be at least the minimum.</div></div>
+            <div><label for="c_hours">Hours per week</label><select id="c_hours" name="hoursPerWeek"><option>Under 5</option><option selected>5–10</option><option>10–20</option><option>20–40</option><option>Full time</option></select></div>
+            <div class="full"><label>Arrangement</label>
+              <div class="seg">
+                <label class="chip"><input type="radio" name="arrangement" value="One-off"><span>One-off task</span></label>
+                <label class="chip"><input type="radio" name="arrangement" value="Ongoing" checked><span>Ongoing</span></label>
+              </div></div>
+          </div>
+        </fieldset>
+        <div class="submitrow"><span class="status" data-status></span><button class="btn primary" type="submit">Save client profile</button></div>
+      </form>
+
+      <!-- AGENT FORM -->
+      <form id="form-agent" class="reg" novalidate hidden>
+        <fieldset>
+          <div class="legendcol"><legend>About you</legend><p>Clients see your first name and last initial.</p></div>
+          <div class="fields">
+            <div><label for="a_name">Full name</label><input type="text" id="a_name" name="name" required autocomplete="name"><div class="err">Enter your name.</div></div>
+            <div><label for="a_email">Email</label><input type="email" id="a_email" name="email" required autocomplete="email"><div class="err">Enter a valid email address.</div></div>
+            <div class="full"><label for="a_bio">Short introduction</label><textarea id="a_bio" name="bio" placeholder="e.g. I've handled customer email for an online shop for two years and type 70 wpm."></textarea></div>
+          </div>
+        </fieldset>
+        <fieldset>
+          <div class="legendcol"><legend>Location</legend><p>Clients often want overlap with their working day.</p></div>
+          <div class="fields">
+            <div><label for="a_country">Country</label><select id="a_country" name="country" required data-countries></select><div class="err">Choose your country.</div></div>
+            <div><label for="a_city">City</label><input type="text" id="a_city" name="city" required autocomplete="address-level2"><div class="err">Enter your city.</div></div>
+            <div class="full"><label for="a_tz">Time zone</label><select id="a_tz" name="timezone" data-tz></select></div>
+          </div>
+        </fieldset>
+        <fieldset>
+          <div class="legendcol"><legend>Skills</legend><p>Choose what you can do well today.</p></div>
+          <div class="fields">
+            <div class="full" data-group="tasks"><label>Tasks you can take</label><div class="chips" data-tasks="skills"></div><div class="err">Pick at least one skill.</div></div>
+            <div class="full" data-group="langs"><label>Languages you speak</label><div class="chips" data-langs="languages"></div><div class="err">Pick at least one language.</div></div>
+            <div><label for="a_eng">English level</label><select id="a_eng" name="englishLevel"><option>Basic</option><option selected>Conversational</option><option>Fluent</option><option>Native</option></select></div>
+            <div><label for="a_dev">Equipment</label><select id="a_dev" name="equipment"><option>Laptop or desktop</option><option>Smartphone only</option><option>Both</option></select></div>
+          </div>
+        </fieldset>
+        <fieldset>
+          <div class="legendcol"><legend>Rate and availability</legend><p>You can change these any time.</p></div>
+          <div class="fields">
+            <div data-group="rate"><label for="a_rate">Your hourly rate (USD)</label><div class="money"><input type="number" id="a_rate" name="rate" min="1" step="0.25" value="3" required></div><div class="err">Enter a rate of at least $1.</div></div>
+            <div><label for="a_hours">Hours available per week</label><select id="a_hours" name="hoursPerWeek"><option>Under 10</option><option selected>10–20</option><option>20–30</option><option>30–40</option><option>40+</option></select></div>
+            <div class="ratecompare" id="rateCompare"></div>
+            <div class="full"><label>When can you work?</label>
+              <div class="chips" data-shifts></div></div>
+            <div class="full"><label for="a_payout">How you want to be paid</label><select id="a_payout" name="payout" data-payouts></select><div class="hint">You keep 100% of your rate. Your payout provider may charge its own transfer fee.</div></div>
+          </div>
+        </fieldset>
+        <fieldset>
+          <div class="legendcol"><legend>Trust</legend><p>Verified agents get matched first.</p></div>
+          <div class="fields">
+            <div class="full" data-group="consent"><label class="check"><input type="checkbox" name="consent" required> I agree to identity verification and to keep all client information confidential.</label><div class="err">Agreement is required to register.</div></div>
+          </div>
+        </fieldset>
+        <div class="submitrow"><span class="status" data-status></span><button class="btn primary" type="submit">Save agent profile</button></div>
+      </form>
+    </div>
+  </section>
+</div>
+
+<!-- DONE / PROFILE -->
+<div id="view-done" hidden>
+  <section class="band" style="border-top:0">
+    <div class="wrap">
+      <div class="done">
+        <div class="badge"><i></i><span id="doneBadge">Profile created</span></div>
+        <h2 id="doneTitle">You're registered.</h2>
+        <p class="sub" id="doneSub" style="margin:0"></p>
+        <dl id="doneList"></dl>
+        <div class="ctas" id="doneCtas"></div>
+        <p class="notice" id="storeNotice"></p>
+      </div>
+    </div>
+  </section>
+</div>
+
+<!-- APP VIEWS (rendered by script) -->
+<div id="view-app" hidden></div>
+</main>
+
+<dialog id="dlg" aria-labelledby="dlgTitle"></dialog>
+
+<footer>
+  <div class="wrap">
+    <span>© Caravan. Real people. Real help. From anywhere.</span>
+    <span class="xs">Prototype: payments run in test mode and no real money moves.</span>
+    <button class="theme" id="themeBtn" type="button">Light theme</button>
+  </div>
+</footer>
+<script type="module" src="/src/main.js"></script>
+</body>
+</html>

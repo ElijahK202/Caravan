@@ -18,7 +18,7 @@ With no Firebase settings the site runs in **demo mode**: everything is saved in
 1. Create a project at [console.firebase.google.com](https://console.firebase.google.com).
 2. **Build > Authentication > Sign-in method:** turn on **Google** and **Email link (passwordless sign-in)**. Under **Settings > Authorized domains**, add your custom domain once you have one.
 3. **Build > Firestore Database:** create a database in production mode.
-4. **Project settings > Your apps:** add a web app, then copy its config into `.env.local` (see `.env.example`).
+4. **Project settings > Your apps:** add a web app, then copy its config into `.env.production` (or `.env.local` for a different project; see `.env.example`).
 5. Install the CLI and deploy the security rules, indexes and site:
 
    ```sh
@@ -31,10 +31,10 @@ With no Firebase settings the site runs in **demo mode**: everything is saved in
 
 ## Deploy from GitHub
 
-`.github/workflows/deploy.yml` builds every push and pull request. Once these are set in the repository settings, it also deploys:
+`.github/workflows/deploy.yml` builds every push and pull request. It also deploys once the secret below is set in the repository settings:
 
-- **Variables** (Settings > Secrets and variables > Actions > Variables): `VITE_FIREBASE_API_KEY`, `VITE_FIREBASE_AUTH_DOMAIN`, `VITE_FIREBASE_PROJECT_ID`, `VITE_FIREBASE_STORAGE_BUCKET`, `VITE_FIREBASE_MESSAGING_SENDER_ID`, `VITE_FIREBASE_APP_ID`, and optionally `VITE_SHOW_SAMPLE_AGENTS` (`true` or `false`).
-- **Secret:** `FIREBASE_SERVICE_ACCOUNT` holds the JSON key of a service account with the *Firebase Hosting Admin* and *Firebase Rules Admin* roles. `firebase init hosting:github` can create it for you.
+- The Firebase web config lives in `.env.production` and the project id in `.firebaserc`. These are public by design.
+- **Secret:** `FIREBASE_SERVICE_ACCOUNT` holds the JSON key of a service account with the *Firebase Admin* role (Google Cloud console > IAM & Admin > Service accounts).
 
 Merges to `main` deploy the live site and the Firestore rules. Pull requests get a 7-day preview link.
 

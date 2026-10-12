@@ -12,6 +12,7 @@
     "firebase": "^13.0.0"
   },
   "devDependencies": {
+    "google-auth-library": "^10.9.1",
     "vite": "^8.3.4"
   }
 }

@@ -50,5 +50,5 @@ jobs:
           SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
         run: |
           printf '%s' "$SERVICE_ACCOUNT" > "$RUNNER_TEMP/sa.json"
-          GOOGLE_APPLICATION_CREDENTIALS="$RUNNER_TEMP/sa.json" npx --yes firebase-tools@15 deploy --only firestore --project default --non-interactive
+          GOOGLE_APPLICATION_CREDENTIALS="$RUNNER_TEMP/sa.json" node scripts/deploy-rules.mjs caravan-6717f
           rm -f "$RUNNER_TEMP/sa.json"

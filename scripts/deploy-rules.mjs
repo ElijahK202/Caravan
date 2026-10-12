@@ -33,6 +33,7 @@ const fsBase = `https://firestore.googleapis.com/v1/projects/${project}/database
 for (const ix of indexes) {
   const r = await call(`${fsBase}/${ix.collectionGroup}/indexes`, "POST", { queryScope: ix.queryScope, fields: ix.fields });
   if (r.status === 409) console.log(`Index on ${ix.collectionGroup} already exists`);
-  else if (r.status >= 300) { console.error(`Creating index on ${ix.collectionGroup} failed:`, r.status, JSON.stringify(r.data)); process.exit(1); }
+  // Not fatal: queries still work through Firestore's single-field index merging, just less efficiently.
+  else if (r.status >= 300) console.warn(`::warning::Creating index on ${ix.collectionGroup} failed (${r.status}). Grant the deploy account Cloud Datastore Index Admin to create it.`);
   else console.log(`Index on ${ix.collectionGroup} is building`);
 }

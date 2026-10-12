@@ -34,6 +34,14 @@ jobs:
           firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
           expires: 7d
 
+      - name: Deploy site
+        if: github.event_name != 'pull_request' && env.HAS_DEPLOY_KEY == 'true'
+        uses: FirebaseExtended/action-hosting-deploy@v0
+        with:
+          repoToken: ${{ secrets.GITHUB_TOKEN }}
+          firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          channelId: live
+
       - name: Deploy Firestore rules and indexes
         if: github.event_name != 'pull_request' && env.HAS_DEPLOY_KEY == 'true'
         env:
@@ -42,11 +50,3 @@ jobs:
           printf '%s' "$SERVICE_ACCOUNT" > "$RUNNER_TEMP/sa.json"
           GOOGLE_APPLICATION_CREDENTIALS="$RUNNER_TEMP/sa.json" npx --yes firebase-tools@15 deploy --only firestore --project default --non-interactive
           rm -f "$RUNNER_TEMP/sa.json"
-
-      - name: Deploy site
-        if: github.event_name != 'pull_request' && env.HAS_DEPLOY_KEY == 'true'
-        uses: FirebaseExtended/action-hosting-deploy@v0
-        with:
-          repoToken: ${{ secrets.GITHUB_TOKEN }}
-          firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
-          channelId: live

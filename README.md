@@ -34,7 +34,7 @@ With no Firebase settings the site runs in **demo mode**: everything is saved in
 `.github/workflows/deploy.yml` builds every push and pull request. It also deploys once the secret below is set in the repository settings:
 
 - The Firebase web config lives in `.env.production` and the project id in `.firebaserc`. These are public by design.
-- **Secret:** `FIREBASE_SERVICE_ACCOUNT` holds the JSON key of a service account with the *Firebase Admin* role (Google Cloud console > IAM & Admin > Service accounts).
+- **Secret:** `FIREBASE_SERVICE_ACCOUNT` holds the JSON key of a service account with the *Firebase Admin* and *Service Usage Consumer* roles (Google Cloud console > IAM & Admin > Service accounts).
 
 Merges to `main` deploy the live site and the Firestore rules. Pull requests get a 7-day preview link.
 

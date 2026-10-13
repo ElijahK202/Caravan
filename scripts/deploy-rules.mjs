@@ -10,6 +10,8 @@ if (!project) { console.error("usage: node scripts/deploy-rules.mjs <project-id>
 
 const auth = new GoogleAuth({ scopes: ["https://www.googleapis.com/auth/cloud-platform"] });
 const client = await auth.getClient();
+const creds = await auth.getCredentials();
+console.log("Deploying as", creds.client_email);
 const call = (url, method = "GET", data) => client.request({ url, method, data, validateStatus: () => true });
 
 // 1. Upload the rules as a new ruleset.

@@ -771,7 +771,8 @@ V.messages = {
     if (msgUnsub) { msgUnsub(); msgUnsub = null; }
     MSGS = [];
     if (p.id) {
-      msgUnsub = Store.watch("messages", list => { MSGS = list.sort((a,b) => String(a.at).localeCompare(String(b.at))); this.renderMsgs(p.id); }, [["threadId","==",p.id],["participants","array-contains",UID]]);
+      // One array-contains filter needs no composite index; the thread is picked out here.
+      msgUnsub = Store.watch("messages", list => { MSGS = list.filter(m => m.threadId === p.id).sort((a,b) => String(a.at).localeCompare(String(b.at))); this.renderMsgs(p.id); }, ["participants","array-contains",UID]);
       unmount = () => { if (msgUnsub) { msgUnsub(); msgUnsub = null; } };
       const ta = $("#msgText");
       ta.addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $("#composer").requestSubmit(); } });

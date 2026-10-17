@@ -2,7 +2,7 @@
 // in device-only demo mode (localStorage), exactly like the original prototype.
 import { initializeApp } from "firebase/app";
 import {
-  getAuth, onAuthStateChanged, signInWithPopup, GoogleAuthProvider, signOut as fbSignOut,
+  getAuth, onAuthStateChanged, signInWithPopup, signInWithRedirect, getRedirectResult, GoogleAuthProvider, signOut as fbSignOut,
   sendSignInLinkToEmail, isSignInWithEmailLink, signInWithEmailLink,
 } from "firebase/auth";
 import {
@@ -43,11 +43,20 @@ export async function currentUser() {
     }
     history.replaceState(null, "", location.pathname);
   }
+  try { await getRedirectResult(auth); } catch (e) { console.warn("google redirect", e?.code); }
   return new Promise(res => { const off = onAuthStateChanged(auth, u => { off(); res(u); }); });
 }
 
 export function onUserChange(cb) { return enabled ? onAuthStateChanged(auth, cb) : () => {}; }
-export const signInWithGoogle = () => signInWithPopup(auth, new GoogleAuthProvider());
+// Popups are often blocked on phones; fall back to a full-page redirect.
+export async function signInWithGoogle() {
+  const provider = new GoogleAuthProvider();
+  try { return await signInWithPopup(auth, provider); }
+  catch (e) {
+    if (["auth/popup-blocked", "auth/operation-not-supported-in-this-environment"].includes(e?.code)) return signInWithRedirect(auth, provider);
+    throw e;
+  }
+}
 export async function sendEmailLink(email) {
   await sendSignInLinkToEmail(auth, email, { url: location.origin + location.pathname, handleCodeInApp: true });
   try { localStorage.setItem(EMAIL_KEY, email); } catch (e) {}

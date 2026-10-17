@@ -206,6 +206,21 @@ function requireRole(r, what){
   return true;
 }
 
+// Turns Firebase Auth error codes into something a visitor (or the site owner) can act on.
+function authError(err, fallback){
+  console.warn("sign-in", err?.code, err?.message);
+  const code = String(err?.code || "").replace("auth/", "");
+  const msg = {
+    "configuration-not-found": "Sign-in isn't set up for this site yet.",
+    "operation-not-allowed": "This sign-in method isn't turned on for this site yet.",
+    "unauthorized-domain": "Sign-in isn't allowed from this web address yet.",
+    "unauthorized-continue-uri": "Sign-in isn't allowed from this web address yet.",
+    "invalid-email": "That email address doesn't look right.",
+    "network-request-failed": "Couldn't reach the sign-in service. Check your connection and try again.",
+    "too-many-requests": "Too many attempts. Wait a minute and try again.",
+  }[code] || fallback;
+  return code ? `${msg} (${code})` : msg;
+}
 function signInDlg(next){
   try { localStorage.setItem(NEXT_KEY, JSON.stringify(next)); } catch(e) {}
   openDlg(`<h3 id="dlgTitle">Sign in to Caravan</h3><p>Continue with Google, or get a one-time sign-in link by email. New here? This creates your account.</p>
@@ -216,13 +231,13 @@ function signInDlg(next){
       const status = $("#si_status", el);
       $("[data-google]", el).onclick = async e => {
         e.target.disabled = true;
-        try { await FB.signInWithGoogle(); } catch(err) { e.target.disabled = false; status.textContent = err?.code === "auth/popup-closed-by-user" ? "" : "Google sign-in didn't work. Try the email link instead."; }
+        try { await FB.signInWithGoogle(); } catch(err) { e.target.disabled = false; status.textContent = err?.code === "auth/popup-closed-by-user" ? "" : authError(err, "Google sign-in didn't work. Try the email link instead."); }
       };
       $("[data-link]", el).onclick = async e => {
         const i = $("#si_email", el), v = i.value.trim(), bad = !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
         i.parentElement.classList.toggle("invalid", bad); if (bad) { i.focus(); return; }
         e.target.disabled = true;
-        try { await FB.sendEmailLink(v); status.textContent = `Check ${v} for a sign-in link.`; } catch(err) { e.target.disabled = false; status.textContent = "Couldn't send the link. Check the address and try again."; }
+        try { await FB.sendEmailLink(v); status.textContent = `Check ${v} for a sign-in link.`; } catch(err) { e.target.disabled = false; status.textContent = authError(err, "Couldn't send the link. Check the address and try again."); }
       };
     });
 }

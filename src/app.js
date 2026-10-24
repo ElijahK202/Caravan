@@ -92,14 +92,15 @@ const Store = (() => {
   const list = (c, w) => { const ws = !w ? [] : Array.isArray(w[0]) ? w : [w]; return Object.keys(local).filter(p => inColl(p, c)).map(p => ({...local[p], id:p.split("/").pop()})).filter(d => ws.every(f => test(d, f))); };
   const notify = p => watchers.forEach(w => { if (inColl(p, w.c)) w.cb(list(w.c, w.w)); });
   const clone = o => JSON.parse(JSON.stringify(o));
+  const timed = p => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(Object.assign(new Error("Database didn't respond"), {code:"timeout"})), 15000))]);
   async function retry(fn){ try { return await fn(); } catch(e) { if (e?.code === "unavailable") { await sleep(500 + Math.random()*700); return fn(); } throw e; } }
   return {
     get mode(){ return mode; },
     useDb(d){ db = d; mode = "shared"; },
-    async get(p){ if (db) { const s = await db.doc(p).get(); return s.exists ? s.data() : null; } return local[p] ? clone(local[p]) : null; },
-    async set(p, data){ if (db) return retry(() => db.doc(p).set(data)); local[p] = clone(data); persist(); notify(p); },
-    async update(p, data){ if (db) return retry(() => db.doc(p).update(data)); local[p] = {...(local[p] || {}), ...clone(data)}; persist(); notify(p); },
-    async del(p){ if (db) return retry(() => db.doc(p).delete()); delete local[p]; persist(); notify(p); },
+    async get(p){ if (db) { const s = await timed(db.doc(p).get()); return s.exists ? s.data() : null; } return local[p] ? clone(local[p]) : null; },
+    async set(p, data){ if (db) return retry(() => timed(db.doc(p).set(data))); local[p] = clone(data); persist(); notify(p); },
+    async update(p, data){ if (db) return retry(() => timed(db.doc(p).update(data))); local[p] = {...(local[p] || {}), ...clone(data)}; persist(); notify(p); },
+    async del(p){ if (db) return retry(() => timed(db.doc(p).delete())); delete local[p]; persist(); notify(p); },
     watch(c, cb, w){
       const ws = !w ? [] : Array.isArray(w[0]) ? w : [w];
       if (db) { let q = db.collection(c); ws.forEach(f => { q = q.where(f[0], f[1], f[2]); });
@@ -438,7 +439,7 @@ function renderNav(){
   const signBtn = !FB.enabled ? "" : USER ? `<button class="btn ghost sm hide-sm" data-act="signout">Sign out</button>` : `<button class="btn ghost sm" data-act="signin">Sign in</button>`;
   $("#authBtns").innerHTML = r === "guest"
     ? `${USER ? "" : `<button class="btn ghost sm hide-sm" data-go="register" data-role="agent">Become an agent</button>`}${signBtn}<button class="btn primary sm" data-go="register" data-role="client">Get started</button>`
-    : `${r === "client" ? `<button class="btn primary sm hide-sm" data-go="post">Post a task</button>` : ""}<button class="btn ghost sm" data-go="profile" aria-label="Your profile"><span class="avatar sm" style="width:22px;height:22px;font-size:10px">${esc(inits((r === "client" ? meClient() : meAgent()).name))}</span>Profile</button>`;
+    : `${r === "client" ? `<button class="btn primary sm hide-sm" data-go="post">Post a task</button>` : ""}<button class="btn ghost sm" data-go="profile" aria-label="Your profile"><span class="avatar sm" style="width:22px;height:22px;font-size:10px">${esc(inits((r === "client" ? meClient() : meAgent()).name))}</span>Profile</button>${signBtn}`;
 }
 $$("[data-act-as]").forEach(b => b.onclick = () => { ACT = b.dataset.actAs; try { localStorage.setItem("caravan:act", ACT); } catch(e) {} renderNav(); if (!STATIC.includes(current.view)) mountApp(); });
 
@@ -974,9 +975,10 @@ $$("#form-client, #form-agent").forEach(form => form.addEventListener("submit", 
   const prev = r === "client" ? meClient() : meAgent();
   const rec = {...o, role:r, updatedAt:now(), createdAt:prev?.createdAt || now()};
   let saved = true;
-  if (Store.mode === "shared") { delete rec.email; try { await Store.set(`data/users/${UID}/private`, {email:o.email, updatedAt:now()}); } catch(err) { console.warn(err); } }
-  try { await Store.set(`${r === "client" ? "clients" : "agents"}/${UID}`, rec); } catch(err) { saved = false; }
-  btn.disabled = false; st.textContent = saved ? "" : "Couldn't save. Check your connection and try again.";
+  if (Store.mode === "shared") { delete rec.email; Store.set(`data/users/${UID}/private`, {email:o.email, updatedAt:now()}).catch(err => console.warn("private", err?.code)); }
+  let why = "";
+  try { await Store.set(`${r === "client" ? "clients" : "agents"}/${UID}`, rec); } catch(err) { saved = false; why = err?.code || ""; console.warn("save profile", err); }
+  btn.disabled = false; st.textContent = saved ? "" : `Couldn't save your profile. Check your connection and try again.${why ? ` (${why})` : ""}`;
   if (!saved) return;
   ACT = r; try { localStorage.setItem("caravan:act", r); } catch(e) {}
   // reflect immediately even before the snapshot arrives
@@ -1039,34 +1041,73 @@ function withSamples(c, list){
   const extra = c === "agents" ? SAMPLE_AGENTS : c === "reviews" ? SAMPLE_REVIEWS : [];
   return [...extra.filter(x => !list.some(d => d.id === x.id)), ...list];
 }
+// Public collections (everything, in demo mode) are watched once for the whole visit.
 function watchColl(c){
-  const sc = Store.mode === "shared" && SCOPED[c];
-  if (!sc) { S[c] = withSamples(c, []); Store.watch(c, list => { S[c] = withSamples(c, list); onData(); }); return; }
-  if (!USER) return;
-  const parts = sc.map(() => []);
-  sc.forEach(([f, op], i) => Store.watch(c, list => {
-    parts[i] = list; const m = new Map(); parts.flat().forEach(d => m.set(d.id, d)); S[c] = [...m.values()]; onData();
-  }, [f, op, UID]));
+  S[c] = withSamples(c, []);
+  Store.watch(c, list => { S[c] = withSamples(c, list); onData(); });
+}
+// Private collections depend on who is signed in, so they are re-watched when that changes.
+let scopedUnsubs = [];
+function watchScoped(){
+  scopedUnsubs.forEach(u => { try { u && u(); } catch(e) {} });
+  scopedUnsubs = [];
+  for (const c of Object.keys(SCOPED)) {
+    S[c] = [];
+    if (!USER) continue;
+    const sc = SCOPED[c], parts = sc.map(() => []);
+    sc.forEach(([f, op], i) => scopedUnsubs.push(Store.watch(c, list => {
+      parts[i] = list; const m = new Map(); parts.flat().forEach(d => m.set(d.id, d)); S[c] = [...m.values()]; onData();
+    }, [f, op, UID])));
+  }
+  onData();
+}
+// Preferences load in the background so a slow database never blocks the page.
+function loadPrefs(){
+  PREFS = {favorites:[], blocked:[], method:"card"};
+  if (!UID) return;
+  const uid = UID;
+  Store.get(prefsPath()).then(p => { if (p && uid === UID) { PREFS = {...PREFS, ...p}; onData(); } }).catch(e => console.warn("prefs", e?.code));
+}
+function setUser(u){
+  USER = u || null; UID = USER ? USER.uid : "";
+  if (USER?.email) $$("#c_email, #a_email").forEach(i => { if (!i.value) i.value = USER.email; });
+  loadPrefs();
+  watchScoped();
+  renderNav();
+}
+// After signing in, carry on to whatever the visitor was trying to do.
+function resumeNext(){
+  let next = null; try { next = JSON.parse(localStorage.getItem(NEXT_KEY) || "null"); localStorage.removeItem(NEXT_KEY); } catch(e) {}
+  if (!next || !USER) return false;
+  if (dlg.open) dlg.close();
+  if (next.role) setRole(next.role);
+  go(next.view, next.params || {});
+  return true;
 }
 async function init(){
   if (FB.enabled) {
-    try { USER = await FB.currentUser(); } catch(e) { console.warn("auth", e); }
-    UID = USER ? USER.uid : "";
     Store.useDb(FB.makeDb());
-    FB.onUserChange(u => { if ((u?.uid || "") !== UID) location.reload(); });
-    if (USER?.email) $$("#c_email, #a_email").forEach(i => { if (!i.value) i.value = USER.email; });
+    let u = null; try { u = await FB.currentUser(); } catch(e) { console.warn("auth", e); }
+    COLLS.filter(c => !SCOPED[c]).forEach(watchColl);
+    setUser(u);
+    FB.onUserChange(u => {
+      if ((u?.uid || "") === UID) return;
+      setUser(u);
+      if (u) { if (!resumeNext()) { if (dlg.open) dlg.close(); refresh(); } }
+      else if (NEEDS_ACCOUNT.includes(current.view) || current.view === "done") go("home");
+      else refresh();
+    });
+  } else {
+    if (!Store.localCount("agents") || !(await Store.get("agents/sample-amina"))) {
+      for (const a of SAMPLE_AGENTS) { const {id, ...rest} = a; await Store.set(`agents/${id}`, rest); }
+      for (const rv of SAMPLE_REVIEWS) { const {id, ...rest} = rv; await Store.set(`reviews/${id}`, rest); }
+    }
+    COLLS.forEach(watchColl);
+    loadPrefs();
   }
-  if (Store.mode === "local" && (!Store.localCount("agents") || !(await Store.get("agents/sample-amina")))) {
-    for (const a of SAMPLE_AGENTS) { const {id, ...rest} = a; await Store.set(`agents/${id}`, rest); }
-    for (const rv of SAMPLE_REVIEWS) { const {id, ...rest} = rv; await Store.set(`reviews/${id}`, rest); }
-  }
-  if (UID) try { const p = await Store.get(prefsPath()); if (p) PREFS = {favorites:[], blocked:[], method:"card", ...p}; } catch(e) {}
-  COLLS.forEach(watchColl);
   READY = true;
   renderNav();
-  let next = null; try { next = JSON.parse(localStorage.getItem(NEXT_KEY) || "null"); localStorage.removeItem(NEXT_KEY); } catch(e) {}
-  if (next && USER) { if (next.role) setRole(next.role); go(next.view, next.params || {}); return; }
-  if (!STATIC.includes(current.view)) mountApp();
+  if (!resumeNext() && !STATIC.includes(current.view)) mountApp();
 }
 renderNav();
 init();

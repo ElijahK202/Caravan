@@ -2,11 +2,11 @@
 // in device-only demo mode (localStorage), exactly like the original prototype.
 import { initializeApp } from "firebase/app";
 import {
-  getAuth, onAuthStateChanged, signInWithPopup, signInWithRedirect, getRedirectResult, GoogleAuthProvider, signOut as fbSignOut,
+  getAuth, connectAuthEmulator, onAuthStateChanged, signInWithPopup, signInWithRedirect, getRedirectResult, GoogleAuthProvider, signOut as fbSignOut,
   sendSignInLinkToEmail, isSignInWithEmailLink, signInWithEmailLink,
 } from "firebase/auth";
 import {
-  initializeFirestore, doc, getDoc, setDoc, updateDoc, deleteDoc,
+  initializeFirestore, connectFirestoreEmulator, doc, getDoc, setDoc, updateDoc, deleteDoc,
   collection, query, where, onSnapshot,
 } from "firebase/firestore";
 
@@ -27,6 +27,11 @@ if (enabled) {
   const app = initializeApp(config);
   auth = getAuth(app);
   fs = initializeFirestore(app, { ignoreUndefinedProperties: true });
+  // Local testing against `firebase emulators:start` (never set in production builds).
+  if (env.VITE_FIREBASE_EMULATORS === "true") {
+    connectAuthEmulator(auth, "http://127.0.0.1:9099", { disableWarnings: true });
+    connectFirestoreEmulator(fs, "127.0.0.1", 8080);
+  }
 }
 
 const EMAIL_KEY = "caravan:signin-email";

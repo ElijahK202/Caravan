@@ -445,11 +445,32 @@ $$("[data-act-as]").forEach(b => b.onclick = () => { ACT = b.dataset.actAs; try 
 
 let unmount = null;
 const NEEDS_ACCOUNT = ["register","post","messages","payments","myagents","profile"];
-function go(view, params={}){
-  if (FB.enabled && !USER && NEEDS_ACCOUNT.includes(view)) { signInDlg({view, params, role:regRole}); return; }
-  if (view === "how") { go("home"); setTimeout(() => $("#how").scrollIntoView({behavior: reduceMotion ? "auto" : "smooth"}), 0); return; }
+// Each page gets its own address (/agents, /task/<id>…) so the browser's back and forward arrows work.
+function urlFor(view, params){
+  if (view === "home") return "/";
+  const q = view === "register" ? `?as=${regRole}${params.edit ? "&edit=1" : ""}` : "";
+  return `/${view}${params.id ? "/" + encodeURIComponent(params.id) : ""}${q}`;
+}
+function routeFromUrl(){
+  const [view, id] = location.pathname.split("/").filter(Boolean).map(decodeURIComponent);
+  const q = new URLSearchParams(location.search), params = {};
+  if (id) params.id = id;
+  if (q.get("edit")) params.edit = true;
+  if (view === "register" && ["client","agent"].includes(q.get("as"))) setRole(q.get("as"));
+  return {view: view && (V[view] || STATIC.includes(view) || ["profile","how"].includes(view)) ? view : "home", params};
+}
+function go(view, params={}, opts={}){
+  if (FB.enabled && !USER && NEEDS_ACCOUNT.includes(view)) {
+    if (opts.history) { go("home", {}, {history:"replace"}); return; }
+    signInDlg({view, params, role:regRole}); return;
+  }
+  if (view === "how") { go("home", {}, opts); setTimeout(() => $("#how").scrollIntoView({behavior: reduceMotion ? "auto" : "smooth"}), 0); return; }
+  const url = urlFor(view === "done" ? "profile" : view, params);
   if (view === "profile") { const r = role(); if (r === "guest") { go("register"); return; } setRole(r); renderDone(r, r === "client" ? meClient() : meAgent()); view = "done"; }
   if (view === "register") { const p = regRole === "client" ? meClient() : meAgent(); if (p && !params.edit) { renderDone(regRole, p); view = "done"; } }
+  if (opts.history !== "none" && url !== location.pathname + location.search) {
+    try { history[opts.history === "replace" ? "replaceState" : "pushState"](null, "", url); } catch(e) {}
+  }
   if (unmount) { unmount(); unmount = null; }
   current = {view, params};
   closeMenu();
@@ -651,7 +672,7 @@ V.task = { mount(el, p){
     if (t.status === "open") actions = `<button class="btn danger sm" data-act="cancel" data-id="${esc(t.id)}">Cancel task</button>`;
     if (t.status === "offered") actions = `<button class="btn ghost sm" data-act="unoffer" data-id="${esc(t.id)}">Withdraw offer</button>`;
     if (t.status === "awaiting_funding") actions = `<button class="btn primary sm" data-act="fund" data-id="${esc(t.id)}">Fund escrow</button><button class="btn ghost sm" data-act="unoffer" data-id="${esc(t.id)}">Withdraw offer</button>`;
-    if (t.status === "active") actions = `<button class="btn ghost sm" data-act="fund" data-id="${esc(t.id)}">Add funds</button><button class="btn primary sm" data-act="complete" data-id="${esc(t.id)}">Mark complete</button><button class="btn danger sm" data-act="end" data-id="${esc(t.id)}">End contract</button>`;
+    if (t.status === "active") actions = `<button class="btn ghost sm" data-act="fund" data-id="${esc(t.id)}">Add funds</button><button class="btn primary sm" data-act="complete" data-id="${esc(t.id)}">Mark complete</button><button class="btn danger sm" data-act="end" data-id="${esc(t.id)}">End contract</button><button class="btn ghost sm" data-act="review" data-id="${esc(t.id)}">${S.reviews.some(x => x.id === t.id) ? "Edit review" : "Rate " + first(t.agentName)}</button>`;
     if (["completed","ended"].includes(t.status)) actions = `<button class="btn primary sm" data-act="rehire" data-id="${esc(t.agentId)}">Rehire ${first(t.agentName)}</button><button class="btn ghost sm" data-act="review" data-id="${esc(t.id)}">${S.reviews.some(x => x.id === t.id) ? "Edit review" : "Leave review"}</button>`;
     if (t.agentId) actions += `<button class="btn ghost sm" data-act="msg" data-id="${esc(t.agentId)}">Message</button>`;
   } else if (isAgent) {
@@ -893,9 +914,11 @@ V.myagents = { mount(el){
     const paid = r2(ts.reduce((s, t) => s + taskMoney(t).approved, 0)), hrs = r2(ts.reduce((s, t) => s + taskMoney(t).approvedHrs, 0));
     const myRv = S.reviews.filter(r => r.agentId === id && r.clientId === UID).sort((x,y) => String(y.at).localeCompare(String(x.at)))[0];
     const fav = PREFS.favorites.includes(id);
+    // Clients can rate an agent once a task with them has started (funded) or finished.
+    const ratable = ts.filter(t => ["active","completed","ended"].includes(t.status)).sort((x,y) => String(y.offeredAt || y.createdAt).localeCompare(String(x.offeredAt || x.createdAt)))[0];
     return `<article class="card"><div class="agenthead"><div class="avatar">${esc(inits(a.name))}</div><div><h3>${esc(short(a.name))}${a.sample ? ' <span class="tag sample">Sample</span>' : ""}</h3><div class="muted sm">${esc(a.country)}, ${money(a.rate)}/hr</div></div><button class="iconbtn" data-act="fav" data-id="${esc(id)}" aria-pressed="${fav}" aria-label="${fav ? "Remove from" : "Add to"} favorites">★</button></div>
       <div class="stats"><div class="stat"><span>Tasks</span><b>${ts.length}</b></div><div class="stat"><span>Hours</span><b>${hrs}</b></div><div class="stat"><span>Paid</span><b>${money(paid)}</b></div></div>
-      <div class="meta">${myRv ? `<span>Your rating: <span class="stars">${"★".repeat(myRv.rating)}</span></span>` : '<span class="muted">Not rated yet</span>'}${active ? `<span>Working on <button class="link" data-go="task" data-id="${esc(active.id)}">${esc(active.title)}</button></span>` : pendingOffer ? `<span>${pill(pendingOffer.status)}</span>` : ""}</div>
+      <div class="meta">${myRv ? `<span>Your rating: <span class="stars">${"★".repeat(myRv.rating)}</span></span><button class="link" data-act="review" data-id="${esc(myRv.taskId || myRv.id)}">Edit</button>` : ratable ? `<button class="btn ghost xs" data-act="review" data-id="${esc(ratable.id)}">★ Rate ${esc(String(a.name).split(" ")[0])}</button>` : '<span class="muted">You can rate them once work starts</span>'}${active ? `<span>Working on <button class="link" data-go="task" data-id="${esc(active.id)}">${esc(active.title)}</button></span>` : pendingOffer ? `<span>${pill(pendingOffer.status)}</span>` : ""}</div>
       <div class="cardfoot">${active ? `<button class="btn danger xs" data-act="end" data-id="${esc(active.id)}">End contract</button>` : `<button class="btn primary xs" data-act="rehire" data-id="${esc(id)}">Rehire</button>`}<button class="btn ghost xs" data-act="msg" data-id="${esc(id)}">Message</button><button class="btn ghost xs" data-go="agent" data-id="${esc(id)}">Profile</button><button class="btn ghost xs" data-act="block" data-id="${esc(id)}">Don't match again</button></div></article>`;
   };
   const blocked = PREFS.blocked.map(agentById).filter(Boolean);
@@ -1042,9 +1065,11 @@ function withSamples(c, list){
   return [...extra.filter(x => !list.some(d => d.id === x.id)), ...list];
 }
 // Public collections (everything, in demo mode) are watched once for the whole visit.
+const LOADED = {}; // collection -> promise that settles on its first snapshot
 function watchColl(c){
   S[c] = withSamples(c, []);
-  Store.watch(c, list => { S[c] = withSamples(c, list); onData(); });
+  let first; LOADED[c] = new Promise(r => first = r);
+  Store.watch(c, list => { S[c] = withSamples(c, list); first(); onData(); });
 }
 // Private collections depend on who is signed in, so they are re-watched when that changes.
 let scopedUnsubs = [];
@@ -1107,8 +1132,15 @@ async function init(){
   }
   READY = true;
   renderNav();
-  if (!resumeNext() && !STATIC.includes(current.view)) mountApp();
+  if (!resumeNext()) {
+    const r = routeFromUrl();
+    // Profile pages depend on who you are, so wait (briefly) for the profiles to arrive.
+    if (["profile","register","done"].includes(r.view)) await Promise.race([Promise.all([LOADED.clients, LOADED.agents]), sleep(4000)]);
+    if (r.view === "done") r.view = "profile";
+    go(r.view, r.params, {history:"replace"});
+  }
 }
+addEventListener("popstate", () => { if (dlg.open) dlg.close(); const r = routeFromUrl(); go(r.view, r.params, {history:"none"}); });
 renderNav();
 init();
 /* ---------- globe ---------- */

@@ -17,6 +17,9 @@ jobs:
     env:
       # Firebase web config comes from .env.production; the project id from .firebaserc.
       HAS_DEPLOY_KEY: ${{ secrets.FIREBASE_SERVICE_ACCOUNT != '' }}
+      # Real payments switch on by themselves once the Stripe key secret exists.
+      HAS_STRIPE: ${{ secrets.STRIPE_SECRET_KEY != '' }}
+      VITE_PAYMENTS: ${{ secrets.STRIPE_SECRET_KEY != '' && 'stripe' || '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -34,6 +37,21 @@ jobs:
           firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
           projectId: caravan-6717f
           expires: 7d
+
+      # Runs before the site deploy so the site never goes live calling functions that don't exist.
+      - name: Deploy payment functions
+        if: github.event_name != 'pull_request' && env.HAS_DEPLOY_KEY == 'true' && env.HAS_STRIPE == 'true'
+        env:
+          SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
+          STRIPE_WEBHOOK_SECRET: ${{ secrets.STRIPE_WEBHOOK_SECRET }}
+        run: |
+          printf '%s' "$SERVICE_ACCOUNT" > "$RUNNER_TEMP/sa.json"
+          (cd functions && npm ci)
+          printf 'STRIPE_SECRET_KEY=%s\n' "$STRIPE_SECRET_KEY" > functions/.env
+          if [ -n "$STRIPE_WEBHOOK_SECRET" ]; then printf 'STRIPE_WEBHOOK_SECRET=%s\n' "$STRIPE_WEBHOOK_SECRET" >> functions/.env; fi
+          GOOGLE_APPLICATION_CREDENTIALS="$RUNNER_TEMP/sa.json" npx -y firebase-tools@14 deploy --only functions --project caravan-6717f --force --non-interactive
+          rm -f "$RUNNER_TEMP/sa.json" functions/.env
 
       - name: Deploy site
         if: github.event_name != 'pull_request' && env.HAS_DEPLOY_KEY == 'true'

@@ -176,6 +176,16 @@ async function postMessage(threadId, text, sys=false){
   await Store.update(`threads/${threadId}`, {lastText:text.slice(0,140), lastAt:now(), lastFrom: sys ? "system" : UID});
 }
 async function ledger(entry){ await Store.set(`ledger/${rid()}`, {...entry, at:now()}); }
+// Real payments (Stripe, through functions/index.js) for tasks with real agents. Sample agents stay in test mode.
+const PAY_LIVE = FB.enabled && import.meta.env.VITE_PAYMENTS === "stripe";
+const realPay = t => PAY_LIVE && !String(t?.agentId || "").startsWith("sample-");
+const payErr = e => String(e?.message || "Something went wrong with the payment. Please try again.").replace(/^Firebase: /, "");
+async function payCall(name, data, btn){
+  if (btn) btn.disabled = true;
+  try { return await FB.call(name, data); }
+  catch(e) { infoDlg("Payment problem", esc(payErr(e))); throw e; }
+  finally { if (btn) btn.disabled = false; }
+}
 
 /* ================= dialogs ================= */
 const dlg = $("#dlg");
@@ -289,23 +299,29 @@ function dlgApply(taskId){
 
 /* ---- escrow ---- */
 function dlgFund(taskId){
-  const t = taskById(taskId), m = taskMoney(t);
+  const t = taskById(taskId), m = taskMoney(t), live = realPay(t);
   const need = r2(Math.max(+t.estHours * +t.rate - m.balance, +t.rate * 2));
   openDlg(`<h3 id="dlgTitle">${m.funded ? "Add funds to escrow" : "Fund escrow"}</h3>
     <p>Money is held by Caravan and released to ${esc(short(t.agentName))} only when you approve logged hours. Unused funds are refunded.</p>
     <div class="fields">
       <div><label for="f_amt">Amount for agent pay (USD)</label><div class="money"><input type="number" id="f_amt" min="1" step="1" value="${need}"></div><div class="hint">${(need / t.rate).toFixed(1)} hours at ${money(t.rate)}/hr</div></div>
-      <div><label for="f_m">Payment method</label><select id="f_m">${methodOptions(t.payMethod || PREFS.method)}</select></div>
+      ${live ? `<input type="hidden" id="f_m" value="card">` : `<div><label for="f_m">Payment method</label><select id="f_m">${methodOptions(t.payMethod || PREFS.method)}</select></div>`}
       <div class="full" id="f_q"></div>
-      <div class="full banner"><b>Test mode.</b> In the live product you'd finish checkout with your chosen provider here. No real money moves in this prototype.</div>
+      ${live ? `<div class="full banner">You'll pay on Stripe's secure checkout page with a card, Apple Pay or Google Pay. Unused escrow is refunded to your card; the service and processing fees aren't.</div><p class="full muted xs" id="f_err" role="alert"></p>`
+        : `<div class="full banner"><b>Test mode.</b> ${t.agentId?.startsWith("sample-") ? "Sample agents can't be paid, so no real money moves for this task." : "No real money moves yet."}</div>`}
     </div>
-    <div class="dlgactions"><button class="btn ghost" data-close>Cancel</button><button class="btn primary" data-ok>Pay into escrow</button></div>`, el => {
+    <div class="dlgactions"><button class="btn ghost" data-close>Cancel</button><button class="btn primary" data-ok>${live ? "Continue to checkout" : "Pay into escrow"}</button></div>`, el => {
       const amt = $("#f_amt", el), meth = $("#f_m", el);
       const upd = () => { const v = r2(amt.value); $("#f_q", el).innerHTML = v >= 1 ? quoteHTML(quote(v, meth.value)) : ""; $(".hint", el).textContent = v >= 1 ? `${(v / t.rate).toFixed(1)} hours at ${money(t.rate)}/hr` : "Enter at least $1."; };
       amt.oninput = upd; meth.onchange = upd; upd();
       $("[data-ok]", el).onclick = async e => {
         const v = r2(amt.value); if (!(v >= 1)) { amt.focus(); return; }
         e.target.disabled = true;
+        if (live) {
+          try { const r = await FB.call("startCheckout", {taskId:t.id, amount:v}); location.href = r.url; }
+          catch(err) { e.target.disabled = false; $("#f_err", el).textContent = payErr(err); }
+          return;
+        }
         const q = quote(v, meth.value);
         await Store.update(`tasks/${t.id}`, {funded:r2((+t.funded || 0) + v), payMethod:meth.value, status: t.status === "awaiting_funding" ? "active" : t.status, fundedAt:now()});
         await ledger({type:"fund", taskId:t.id, taskTitle:t.title, clientId:t.clientId, agentId:t.agentId, amount:v, fees:r2(q.service + q.proc), total:q.total, method:meth.value});
@@ -342,12 +358,18 @@ async function approveHours(hid){
       <div class="dlgactions"><button class="btn ghost" data-close>Cancel</button><button class="btn primary" data-fund>Add funds</button></div>`, el => { $("[data-fund]", el).onclick = () => dlgFund(t.id); });
     return;
   }
+  if (realPay(t)) {
+    const r = await payCall("approveHours", {hoursId:hid}).catch(() => null);
+    if (r?.payout === "owed") infoDlg("Hours approved", `${esc(short(t.agentName))} hasn't set up Stripe payouts yet, so ${money(h.amount)} is held for them and paid as soon as they do.`);
+    return;
+  }
   await Store.update(`hours/${hid}`, {status:"approved", decidedAt:now()});
   await ledger({type:"release", taskId:t.id, taskTitle:t.title, clientId:t.clientId, agentId:t.agentId, amount:h.amount, hours:h.hours});
 }
 async function rejectHours(hid){
   const h = S.hours.find(x => x.id === hid), t = taskById(h.taskId);
   if (!await confirmDlg("Reject these hours?", `${h.hours} h (${money(h.amount)}) won't be paid. Tell ${esc(short(t.agentName))} why in Messages so they can fix it.`, "Reject hours", true)) return;
+  if (realPay(t)) { await payCall("rejectHours", {hoursId:hid}).catch(() => null); return; }
   await Store.update(`hours/${hid}`, {status:"rejected", decidedAt:now()});
   if (t.status !== "active") { // contract is closed: return the held amount
     await Store.update(`tasks/${t.id}`, {refunded:r2((+t.refunded || 0) + h.amount)});
@@ -358,6 +380,7 @@ async function completeTask(taskId){
   const t = taskById(taskId), m = taskMoney(t);
   if (m.pending > 0) { infoDlg("Review pending hours first", `There ${m.pendingHrs === 1 ? "is 1 hour" : `are ${m.pendingHrs} hours`} waiting for your decision. Approve or reject them before closing the task.`); return; }
   if (!await confirmDlg("Mark task complete?", `${esc(short(t.agentName))} has been paid ${money(m.approved)}. ${m.free > 0 ? `The unused ${money(m.free)} in escrow goes back to your ${esc(M[t.payMethod]?.name || "payment method")}.` : ""}`, "Mark complete")) return;
+  if (realPay(t)) { if (!await payCall("closeTask", {taskId:t.id, kind:"complete"}).catch(() => null)) return; dlgReview(t.id); return; }
   await Store.update(`tasks/${t.id}`, {status:"completed", completedAt:now(), refunded:r2((+t.refunded || 0) + Math.max(0, m.free))});
   if (m.free > 0) await ledger({type:"refund", taskId:t.id, taskTitle:t.title, clientId:t.clientId, agentId:t.agentId, amount:m.free, method:t.payMethod});
   dlgReview(t.id);
@@ -376,8 +399,13 @@ function dlgEnd(taskId){
         e.target.disabled = true;
         const reason = $("#e_reason", el).value, note = $("#e_note", el).value.trim(), block = $("#e_block", el).checked;
         const mm = taskMoney(taskById(taskId)), refund = Math.max(0, mm.free);
+        if (realPay(t)) {
+          try { await FB.call("closeTask", {taskId:t.id, kind:"end", reason, note}); }
+          catch(err) { e.target.disabled = false; infoDlg("Payment problem", esc(payErr(err))); return; }
+        } else {
         await Store.update(`tasks/${t.id}`, {status:"ended", endedAt:now(), endReason:reason, endNote:note, refunded:r2((+t.refunded || 0) + refund)});
-        if (refund > 0) await ledger({type:"refund", taskId:t.id, taskTitle:t.title, clientId:t.clientId, agentId:t.agentId, amount:refund, method:t.payMethod});
+        }
+        if (refund > 0 && !realPay(t)) await ledger({type:"refund", taskId:t.id, taskTitle:t.title, clientId:t.clientId, agentId:t.agentId, amount:refund, method:t.payMethod});
         const th = await ensureThread(t.clientId, t.agentId);
         await postMessage(th, `Contract ended for “${t.title}”. Reason: ${reason}.${note ? " Note: " + note : ""}`, true);
         if (block && !PREFS.blocked.includes(t.agentId)) { PREFS.blocked.push(t.agentId); PREFS.favorites = PREFS.favorites.filter(x => x !== t.agentId); await savePrefs(); }
@@ -495,7 +523,7 @@ document.addEventListener("click", e => {
     unoffer: async () => { if (!await confirmDlg("Withdraw your offer?", "The task goes back to open.", "Withdraw offer", true)) return; await Store.update(`tasks/${id}`, {status:"open", agentId:null, agentName:null, rate:null}); },
     cancel: async () => { if (await confirmDlg("Cancel this task?", "Agents can no longer apply.", "Cancel task", true)) Store.update(`tasks/${id}`, {status:"cancelled"}); },
     fund: () => dlgFund(id), log: () => dlgLogHours(id, a.dataset.behalf === "1"),
-    approve: () => approveHours(id), reject: () => rejectHours(id),
+    approve: () => approveHours(id), reject: () => rejectHours(id), connect: () => connectPayouts(a),
     complete: () => completeTask(id), end: () => dlgEnd(id), review: () => dlgReview(id),
     rehire: () => { if (requireRole("client", "rehire agents")) go("post", {direct:id}); },
     method: async () => { PREFS.method = id; await savePrefs(); refresh(); },
@@ -863,8 +891,44 @@ V.payments = { mount(el){
   el.innerHTML = `<div class="wrap page">${head("Earnings", "What you've been paid and what's waiting for approval.", `<button class="btn ghost sm" data-go="register" data-role="agent">Change payout method</button>`)}
     <div class="stats" style="margin-bottom:20px"><div class="stat"><span>Paid to you</span><b>${money(sum(L))}</b></div><div class="stat"><span>Waiting for approval</span><b>${money(sum(pend))}</b></div><div class="stat"><span>Funded in your active tasks</span><b>${money(myTasks.reduce((a,t) => a + taskMoney(t).free, 0))}</b></div><div class="stat"><span>Payout method</span><b style="font-size:17px">${esc(me.payout || "Not set")}</b></div></div>
     <div class="banner" style="margin-bottom:20px">You keep 100% of your rate. Clients pay Caravan's service fee and card or wallet fees. Your payout provider may charge its own transfer fee.</div>
+    ${PAY_LIVE ? `<div class="card" id="payoutCard" style="margin-bottom:20px">${payoutCardHTML()}</div>` : ""}
     <div class="card"><h3>Payment history</h3>${ledgerTable(L, "agent")}</div></div>`;
+  if (PAY_LIVE && PAYOUT.status === null) checkPayouts();
 }};
+// Agent payouts through Stripe Connect. Status comes from the payoutStatus function.
+const PAYOUT = {status:null, paid:0};
+async function checkPayouts(){
+  PAYOUT.status = "checking";
+  try { Object.assign(PAYOUT, await FB.call("payoutStatus", {})); } catch(e) { PAYOUT.status = "error"; }
+  const c = $("#payoutCard"); if (c) c.innerHTML = payoutCardHTML();
+}
+function payoutCardHTML(){
+  const owed = r2(S.hours.filter(h => h.agentId === UID && h.status === "approved" && h.payout === "owed").reduce((a, h) => a + (+h.amount || 0), 0));
+  const st = PAYOUT.status, owedTxt = owed > 0 ? ` ${money(owed)} of approved pay is waiting for you.` : "";
+  const body = {
+    enabled: `<p class="muted sm" style="margin:0">Payouts are on. Approved hours are sent to your Stripe account, which pays out to your bank.${owedTxt}</p>`,
+    pending: `<p class="muted sm">Stripe still needs a few details before it can pay you.${owedTxt}</p><button class="btn primary sm" data-act="connect">Finish payout setup</button>`,
+    unsupported: `<p class="muted sm" style="margin:0">Stripe can't pay out to your country yet, so Caravan pays you with your payout method (${esc(meAgent()?.payout || "not set")}).${owedTxt}</p>`,
+    none: `<p class="muted sm">Connect a Stripe account to receive pay for approved hours. It takes a few minutes and Stripe checks your identity.${owedTxt}</p><button class="btn primary sm" data-act="connect">Set up payouts</button>`,
+    error: `<p class="muted sm">Couldn't load your payout status.</p><button class="btn ghost sm" data-act="connect">Set up payouts</button>`,
+  }[st] || '<p class="muted sm" style="margin:0">Checking payout status…</p>';
+  return `<h3>Get paid</h3>${body}`;
+}
+async function connectPayouts(btn){
+  try { const r = await payCall("connectPayouts", {}, btn); location.href = r.url; }
+  catch(e) { checkPayouts(); }
+}
+// Returning from Stripe: Checkout (?checkout=<session>) or payout onboarding (?connect=done).
+async function handlePaymentReturn(){
+  const q = new URLSearchParams(location.search), sid = q.get("checkout"), con = q.get("connect");
+  if (!PAY_LIVE || !(sid || con) || !USER) return;
+  history.replaceState(null, "", location.pathname);
+  if (sid) {
+    try { const r = await FB.call("confirmCheckout", {sessionId:sid}); infoDlg(r.paid ? "Payment received" : "Payment not finished", r.paid ? "Your escrow is funded. The agent can start work." : "Stripe hasn't confirmed this payment. If you were charged, it will show up here shortly."); }
+    catch(e) { infoDlg("Payment problem", esc(payErr(e))); }
+  }
+  if (con) { await checkPayouts(); if (con === "retry" && PAYOUT.status !== "enabled") connectPayouts(); }
+}
 function methodPicker(sel){
   return `<div class="methods">${[...new Set(METHODS.map(m => m.g))].map(g => `<div><h4>${g}</h4><div class="mgrid">${METHODS.filter(m => m.g === g).map(m => `<button class="mbtn" type="button" data-act="method" data-id="${m.id}" aria-pressed="${m.id === sel}"><b>${m.name}</b><span>${m.sub}<br>${m.pct ? m.pct + "%" : ""}${m.pct && m.fixed ? " + " : ""}${m.fixed ? money(m.fixed) : ""}${m.cap ? `, max ${money(m.cap)}` : ""}${!m.pct && !m.fixed ? "No fee" : ""}</span></button>`).join("")}</div></div>`).join("")}</div>`;
 }
@@ -1137,8 +1201,10 @@ async function init(){
     // Profile pages depend on who you are, so wait (briefly) for the profiles to arrive.
     if (["profile","register","done"].includes(r.view)) await Promise.race([Promise.all([LOADED.clients, LOADED.agents]), sleep(4000)]);
     if (r.view === "done") r.view = "profile";
-    go(r.view, r.params, {history:"replace"});
+    go(r.view, r.params, {history:"none"});
+    handlePaymentReturn();
   }
+  if (PAY_LIVE) $("#payNote").textContent = "Payments are processed securely by Stripe.";
 }
 addEventListener("popstate", () => { if (dlg.open) dlg.close(); const r = routeFromUrl(); go(r.view, r.params, {history:"none"}); });
 renderNav();

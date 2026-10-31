@@ -1,9 +1,10 @@
 rules_version = '2';
 
 // Caravan access rules.
-// Payments are still in test mode: escrow amounts are written by the browser.
-// Before real money moves, fund/release/refund must move to Cloud Functions
-// and the money fields below must become read-only for clients.
+// Real money (tasks with real agents) is moved only by the Cloud Functions in
+// functions/index.js, which bypass these rules. Browsers may not touch escrow
+// amounts, approve hours or write payment history for those tasks.
+// Tasks with sample agents stay in browser-side test mode.
 service cloud.firestore {
   match /databases/{database}/documents {
 
@@ -11,6 +12,7 @@ service cloud.firestore {
     function me() { return request.auth.uid; }
     function isSample(id) { return id.matches('sample-.*'); }
     function task(id) { return get(/databases/$(database)/documents/tasks/$(id)).data; }
+    function serverStatus(s) { return s in ['active', 'completed', 'ended']; }
 
     // Public profiles. Emails are kept out of these and stored under /data/users.
     match /agents/{uid} {
@@ -23,12 +25,23 @@ service cloud.firestore {
     }
 
     // Tasks are a public job board. Only the client creates or cancels; the hired agent can accept or decline.
+    // For real agents: escrow amounts and the funded/finished statuses belong to the server,
+    // and the agent can't be swapped once money is held.
+    function realTaskUpdateOk() {
+      let changed = request.resource.data.diff(resource.data).affectedKeys();
+      return !changed.hasAny(['funded', 'refunded', 'fundedAt', 'payMethod', 'completedAt', 'endedAt', 'endReason', 'endNote'])
+        && (!changed.hasAny(['status']) || (!serverStatus(resource.data.status) && !serverStatus(request.resource.data.status)))
+        && (!changed.hasAny(['agentId']) || resource.data.get('funded', 0) == 0);
+    }
     match /tasks/{taskId} {
       allow read: if true;
-      allow create: if signedIn() && request.resource.data.clientId == me();
+      allow create: if signedIn() && request.resource.data.clientId == me()
+        && request.resource.data.get('funded', 0) == 0 && request.resource.data.get('refunded', 0) == 0
+        && (!serverStatus(request.resource.data.status) || isSample(request.resource.data.get('agentId', '')));
       allow update: if signedIn()
         && request.resource.data.clientId == resource.data.clientId
-        && (resource.data.clientId == me() || resource.data.agentId == me());
+        && (resource.data.clientId == me() || resource.data.agentId == me())
+        && (isSample(resource.data.agentId) && isSample(request.resource.data.agentId) || realTaskUpdateOk());
       allow delete: if false;
     }
 
@@ -71,15 +84,24 @@ service cloud.firestore {
         && (request.resource.data.agentId == me()
             || (request.resource.data.clientId == me() && isSample(request.resource.data.agentId)))
         && request.resource.data.status == 'pending';
-      allow update: if signedIn() && resource.data.clientId == me()
+      allow update: if signedIn() && resource.data.clientId == me() && isSample(resource.data.agentId)
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'decidedAt']);
     }
 
-    // Escrow history. Written by the client's browser while payments are in test mode.
+    // Escrow history. The server writes it for real agents; the browser only for sample agents (test mode).
     match /ledger/{entryId} {
       allow read: if signedIn() && (resource.data.agentId == me() || resource.data.clientId == me());
       allow create: if signedIn() && request.resource.data.clientId == me()
-        && task(request.resource.data.taskId).clientId == me();
+        && task(request.resource.data.taskId).clientId == me()
+        && isSample(request.resource.data.agentId);
+    }
+
+    // Stripe Checkout sessions and agent payout accounts: server-written only.
+    match /payments/{sessionId} {
+      allow read: if signedIn() && resource.data.clientId == me();
+    }
+    match /payouts/{uid} {
+      allow read: if signedIn() && me() == uid;
     }
 
     // Private per-user data: email, favorites, blocked agents, default payment method.

@@ -46,9 +46,23 @@ Merges to `main` deploy the live site and the Firestore rules. Pull requests get
 - `src/firebase.js`: sign-in and a small Firestore adapter behind the app's `Store`.
 - `firestore.rules`: who can read and write what. Messages, applications, hours and payment history are only visible to the client and agent involved, and emails are kept out of public profiles.
 
-## Before taking real money
+## Payments
 
-Payments are in **test mode**: the escrow screens calculate fees, but no money moves, and escrow amounts are written by the browser. Before going live with payments:
+Tasks with real agents are paid through Stripe. Tasks with the sample agents stay in test mode, and no money moves for them.
 
-- Move funding, releases and refunds to Cloud Functions (for example with Stripe Connect for agent payouts), and make the money fields read-only for clients in `firestore.rules`.
-- Add terms of service, a privacy policy and identity verification for agents.
+- **Funding escrow:** the client pays on Stripe Checkout (card, Apple Pay or Google Pay). The money is held in Caravan's Stripe balance.
+- **Approving hours:** the agent's share is transferred to their Stripe Express account, which agents set up from their Earnings page. If an agent hasn't set one up, or Stripe can't pay out to their country, the pay is marked as owed. It's sent automatically once they connect, or you can pay it by hand.
+- **Completing or ending a task:** unused escrow is refunded to the client's card. The service and processing fees aren't refunded.
+
+All of this runs in `functions/index.js` (Cloud Functions). `firestore.rules` stops browsers from changing escrow amounts, approving hours or writing payment history for real agents.
+
+To switch it on:
+
+1. Upgrade the Firebase project to the **Blaze** plan. Cloud Functions need it.
+2. Add the Stripe secret key (`sk_test_…` while testing, `sk_live_…` for real money) as the GitHub secret `STRIPE_SECRET_KEY`. The next deploy publishes the functions and turns on Stripe checkout on the site.
+3. In Stripe, turn on **Connect** (Express accounts) so agents can receive payouts.
+4. Optional: add a webhook for `checkout.session.completed` pointing at the `stripeWebhook` function URL, and save its signing secret as `STRIPE_WEBHOOK_SECRET`. This records payments even when a client closes the tab before returning from Stripe.
+
+The deploy service account needs the *Cloud Functions Admin* and *Service Account User* roles, on top of the Hosting and Rules roles.
+
+Before taking live money, add terms of service, a privacy policy and identity verification for agents.

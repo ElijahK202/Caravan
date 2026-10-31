@@ -9,6 +9,7 @@ import {
   initializeFirestore, connectFirestoreEmulator, doc, getDoc, setDoc, updateDoc, deleteDoc,
   collection, query, where, onSnapshot,
 } from "firebase/firestore";
+import { getFunctions, connectFunctionsEmulator, httpsCallable } from "firebase/functions";
 
 const env = import.meta.env;
 const config = {
@@ -22,15 +23,17 @@ const config = {
 
 export const enabled = !!(config.apiKey && config.projectId && config.appId);
 
-let auth = null, fs = null;
+let auth = null, fs = null, fns = null;
 if (enabled) {
   const app = initializeApp(config);
   auth = getAuth(app);
   fs = initializeFirestore(app, { ignoreUndefinedProperties: true });
+  fns = getFunctions(app, "us-central1");
   // Local testing against `firebase emulators:start` (never set in production builds).
   if (env.VITE_FIREBASE_EMULATORS === "true") {
     connectAuthEmulator(auth, "http://127.0.0.1:9099", { disableWarnings: true });
     connectFirestoreEmulator(fs, "127.0.0.1", 8080);
+    connectFunctionsEmulator(fns, "127.0.0.1", 5001);
   }
 }
 
@@ -67,6 +70,8 @@ export async function sendEmailLink(email) {
   try { localStorage.setItem(EMAIL_KEY, email); } catch (e) {}
 }
 export const signOut = () => fbSignOut(auth);
+/** Calls a payments Cloud Function (see functions/index.js) and returns its result. */
+export const call = (name, data) => httpsCallable(fns, name)({ ...data, origin: location.origin }).then(r => r.data);
 
 /**
  * Adapter with the same shape the app's Store used for the Claude artifact database:

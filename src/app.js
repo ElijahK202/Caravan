@@ -455,7 +455,7 @@ const closeMenu = () => { hdr.classList.remove("open"); menuBtn.setAttribute("ar
 function navItems(){
   const r = role();
   if (r === "client") return [["home","Home"],["agents","Find agents"],["tasks","My tasks"],["myagents","My agents"],["messages","Messages"],["payments","Payments"],["pricing","Pricing"]];
-  if (r === "agent") return [["home","Home"],["tasks","Find work"],["agents","Agents"],["messages","Messages"],["payments","Earnings"],["pricing","Pricing"]];
+  if (r === "agent") return [["home","Home"],["tasks","Find work"],["work","My work"],["agents","Agents"],["messages","Messages"],["payments","Earnings"],["pricing","Pricing"]];
   return [["home","Home"],["how","How it works"],["agents","Find agents"],["tasks","Open tasks"],["pricing","Pricing"]];
 }
 function renderNav(){
@@ -527,7 +527,7 @@ document.addEventListener("click", e => {
     complete: () => completeTask(id), end: () => dlgEnd(id), review: () => dlgReview(id),
     rehire: () => { if (requireRole("client", "rehire agents")) go("post", {direct:id}); },
     method: async () => { PREFS.method = id; await savePrefs(); refresh(); },
-    tab: () => { current.params.tab = id; mountApp(); },
+    tab: () => { if (role() === "agent") { go(id === "work" ? "work" : "tasks", id === "work" ? {} : {tab:id}); return; } current.params.tab = id; mountApp(); },
     signin: () => signInDlg({view:current.view, params:current.params}),
     signout: async () => { if (await confirmDlg("Sign out?", "You can sign back in any time.", "Sign out")) FB.signOut(); },
   }[a.dataset.act] || (() => {}))();
@@ -681,10 +681,13 @@ V.tasks = { mount(el, p){
   } else {
     body = myApps.length ? `<div class="card tablewrap" style="padding:8px 12px"><table class="t"><thead><tr><th>Task</th><th class="num">Your rate</th><th>Sent</th><th></th></tr></thead><tbody>${myApps.map(ap => { const t = taskById(ap.taskId); return t ? `<tr><td><button class="link" data-go="task" data-id="${esc(t.id)}">${esc(t.title)}</button></td><td class="num">${money(ap.rate)}</td><td class="muted sm">${fmtDate(ap.at)}</td><td>${t.status === "open" ? `<button class="btn ghost xs" data-act="withdraw" data-id="${esc(t.id)}">Withdraw</button>` : (t.agentId === UID ? pill(t.status) : '<span class="pill cancelled">Closed</span>')}</td></tr>` : ""; }).join("")}</tbody></table></div>` : emptyBox("You haven't applied to anything yet.");
   }
-  el.innerHTML = `<div class="wrap page">${head("Find work", `Open tasks ranked by how well they fit your skills, languages and rate.`)}
+  el.innerHTML = `<div class="wrap page">${tab === "work" ? head("My work", "Tasks you've been hired for. Open one to accept an offer or log hours.") : head("Find work", `Open tasks ranked by how well they fit your skills, languages and rate.`)}
     <div class="tabs" role="tablist"><button role="tab" data-act="tab" data-id="find" aria-selected="${tab === "find"}">Open tasks (${open.length})</button><button role="tab" data-act="tab" data-id="work" aria-selected="${tab === "work"}">My work${offers ? ` · ${offers} new offer${offers > 1 ? "s" : ""}` : ""}</button><button role="tab" data-act="tab" data-id="apps" aria-selected="${tab === "apps"}">Applications (${myApps.length})</button></div>
     ${body}</div>`;
 }};
+
+// Agents' hired tasks (where they accept offers and log hours) get their own page and nav link.
+V.work = { mount(el, p){ V.tasks.mount(el, {...p, tab:"work"}); } };
 
 /* ---- task detail ---- */
 V.task = { mount(el, p){
@@ -891,6 +894,7 @@ V.payments = { mount(el){
   el.innerHTML = `<div class="wrap page">${head("Earnings", "What you've been paid and what's waiting for approval.", `<button class="btn ghost sm" data-go="register" data-role="agent">Change payout method</button>`)}
     <div class="stats" style="margin-bottom:20px"><div class="stat"><span>Paid to you</span><b>${money(sum(L))}</b></div><div class="stat"><span>Waiting for approval</span><b>${money(sum(pend))}</b></div><div class="stat"><span>Funded in your active tasks</span><b>${money(myTasks.reduce((a,t) => a + taskMoney(t).free, 0))}</b></div><div class="stat"><span>Payout method</span><b style="font-size:17px">${esc(me.payout || "Not set")}</b></div></div>
     <div class="banner" style="margin-bottom:20px">You keep 100% of your rate. Clients pay Caravan's service fee and card or wallet fees. Your payout provider may charge its own transfer fee.</div>
+    ${myTasks.length ? `<div class="card" style="margin-bottom:20px"><h3>Log your hours</h3><p class="muted sm">You're paid for hours once the client approves them.</p>${myTasks.map(t => `<div class="meta" style="padding:10px 0;border-top:1px solid var(--line)"><button class="link" data-go="task" data-id="${esc(t.id)}">${esc(t.title)}</button><span class="muted">${money(t.rate)}/hr · ${money(taskMoney(t).free)} funded</span><button class="btn primary xs" style="margin-left:auto" data-act="log" data-id="${esc(t.id)}">Log hours</button></div>`).join("")}</div>` : ""}
     ${PAY_LIVE ? `<div class="card" id="payoutCard" style="margin-bottom:20px">${payoutCardHTML()}</div>` : ""}
     <div class="card"><h3>Payment history</h3>${ledgerTable(L, "agent")}</div></div>`;
   if (PAY_LIVE && PAYOUT.status === null) checkPayouts();

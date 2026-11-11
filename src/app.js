@@ -686,6 +686,35 @@ V.tasks = { mount(el, p){
     ${body}</div>`;
 }};
 
+/* ---- legal pages (Stripe requires these before live payments) ---- */
+const SUPPORT = "support@hirecaravan.org";
+function legalPage(title, updated, sections){
+  return { mount(el){ el.innerHTML = `<div class="wrap page" style="max-width:760px">${head(title, `Last updated ${updated}`)}${sections.map(([h, body]) => `<div class="card" style="margin-bottom:12px"><h3>${h}</h3>${body.map(x => `<p class="sm">${x}</p>`).join("")}</div>`).join("")}<p class="muted sm">Questions? Email <a class="link" href="mailto:${SUPPORT}">${SUPPORT}</a>.</p></div>`; } };
+}
+V.terms = legalPage("Terms of service", "November 11, 2026", [
+  ["What Caravan is", ["Caravan is a marketplace that connects clients who need remote help with independent assistants (\"agents\"). Agents are independent contractors, not Caravan employees. Caravan isn't a party to the work agreement between a client and an agent."]],
+  ["Accounts", ["You must be at least 18 and give accurate information. You're responsible for activity on your account. We may suspend accounts that break these terms, misuse the service or put other users at risk."]],
+  ["Escrow and payments", ["Clients fund escrow before work starts. Payments are processed by Stripe; card details never touch Caravan's servers. Funds are released to the agent only when the client approves logged hours.", "Clients pay the agent's rate plus a 10% Caravan service fee and a payment processing fee, both shown before checkout. Agents keep 100% of their rate; their payout provider may charge its own fee."]],
+  ["Agent payouts", ["Agents receive payouts through Stripe Connect, which requires identity verification. Where Stripe doesn't support an agent's country, Caravan pays approved earnings using the payout method on the agent's profile."]],
+  ["Hours and disputes", ["Agents must log only hours they actually worked. Clients should approve or reject logged hours promptly and explain any rejection. If you can't resolve a disagreement, email us and we'll review the task history and messages and decide how held escrow is handled."]],
+  ["Conduct", ["Don't use Caravan for illegal work, harassment, spam, or to take payments for work outside the platform to avoid fees. Don't share login details or other people's personal data without permission."]],
+  ["Liability", ["Caravan provides the platform \"as is\". To the extent the law allows, Caravan isn't liable for the quality of work agents perform, or for indirect losses, and our total liability is limited to the fees you paid Caravan in the previous 12 months."]],
+  ["Changes", ["We may update these terms and will note the date above. Continuing to use Caravan after a change means you accept it."]],
+]);
+V.privacy = legalPage("Privacy policy", "November 11, 2026", [
+  ["What we collect", ["Your sign-in email, the profile you create (name, location, skills, rates, languages), tasks, messages, logged hours, reviews and payment history. Card and bank details are collected and stored by Stripe, not Caravan."]],
+  ["How we use it", ["To run the marketplace: matching clients with agents, showing public profiles, delivering messages, processing escrow and payouts, preventing fraud and answering support requests. We don't sell your personal data."]],
+  ["Who can see what", ["Profiles, task listings and reviews are public. Messages, applications, hours and payments are visible only to the client and agent involved. Your email isn't shown on your public profile."]],
+  ["Service providers", ["Caravan runs on Google Firebase (hosting, sign-in and database) and uses Stripe for payments and identity checks. They process data on our behalf under their own privacy terms."]],
+  ["Your choices", ["You can edit your profile at any time. To delete your account and data, email us; payment records may be kept as long as the law requires."]],
+]);
+V.refunds = legalPage("Refund policy", "November 11, 2026", [
+  ["Unused escrow", ["When a client marks a task complete or ends a contract, any escrow not needed for approved or pending hours is refunded automatically to the original card. Refunds usually appear within 5–10 business days."]],
+  ["Rejected hours", ["Hours a client rejects aren't paid. If the contract is already closed, their amount is refunded to the client."]],
+  ["Fees", ["Caravan's service fee and the payment processing fee aren't refunded, because they cover the cost of processing the payment."]],
+  ["Approved hours", ["Once a client approves hours, that pay goes to the agent and can't be refunded through Caravan. If you think there's been a mistake or fraud, email us within 30 days and we'll review it."]],
+]);
+
 // Agents' hired tasks (where they accept offers and log hours) get their own page and nav link.
 V.work = { mount(el, p){ V.tasks.mount(el, {...p, tab:"work"}); } };
 

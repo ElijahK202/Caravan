@@ -19,6 +19,11 @@ const SERVICE_FEE = 0.10;              // charged to the client on top of agent 
 const CARD_PCT = 0.029, CARD_FIXED = 0.30; // shown to clients as the processing estimate
 const ORIGINS = ["https://hirecaravan.org", "https://www.hirecaravan.org", "https://caravan-6717f.web.app", "https://caravan-6717f.firebaseapp.com", "http://localhost:5173", "http://localhost:4173", "http://localhost:4177"];
 
+// Test and live Stripe objects can't mix, so payment and payout records carry the mode they were
+// made in and records from the other mode are ignored (records from before this had no mode: test).
+const MODE = String(process.env.STRIPE_SECRET_KEY || "").startsWith("sk_live") ? "live" : "test";
+const sameMode = d => (d?.mode || "test") === MODE;
+
 let stripeClient = null;
 async function stripe() {
   if (stripeClient) return stripeClient;
@@ -79,7 +84,7 @@ export const startCheckout = onCall(async req => {
     success_url: `${origin}/task/${encodeURIComponent(t.id)}?checkout={CHECKOUT_SESSION_ID}`,
     cancel_url: `${origin}/task/${encodeURIComponent(t.id)}`,
   });
-  await db.doc(`payments/${session.id}`).set({ taskId: t.id, clientId: uid, agentId: t.agentId, amount: q.sub, service: q.service, proc: q.proc, total: q.total, used: 0, status: "open", createdAt: now() });
+  await db.doc(`payments/${session.id}`).set({ taskId: t.id, clientId: uid, agentId: t.agentId, amount: q.sub, service: q.service, proc: q.proc, total: q.total, used: 0, status: "open", mode: MODE, createdAt: now() });
   return { url: session.url };
 });
 
@@ -127,7 +132,7 @@ export const stripeWebhook = onRequest(async (req, res) => {
 async function spend(taskId, amount, fn) {
   let rem = cents(amount);
   const pays = (await db.collection("payments").where("taskId", "==", taskId).get()).docs
-    .filter(d => d.data().status === "paid" && d.data().chargeId).sort((a, b) => String(a.data().paidAt).localeCompare(String(b.data().paidAt)));
+    .filter(d => d.data().status === "paid" && d.data().chargeId && sameMode(d.data())).sort((a, b) => String(a.data().paidAt).localeCompare(String(b.data().paidAt)));
   for (const p of pays) {
     if (rem <= 0) break;
     const part = await db.runTransaction(async tx => {
@@ -144,7 +149,7 @@ async function spend(taskId, amount, fn) {
 
 async function payoutAccount(agentId) {
   const s = await db.doc(`payouts/${agentId}`).get();
-  return s.exists && s.data().payoutsEnabled ? s.data().accountId : null;
+  return s.exists && s.data().payoutsEnabled && sameMode(s.data()) ? s.data().accountId : null;
 }
 
 // Sends an approved hours entry to the agent, or leaves it marked as owed.
@@ -236,6 +241,7 @@ export const connectPayouts = onCall(async req => {
   if (!a) throw new HttpsError("failed-precondition", "Create an agent profile first.");
   const ref = db.doc(`payouts/${uid}`);
   let p = (await ref.get()).data() || {};
+  if (p.accountId && !sameMode(p)) p = {};
   if (!p.accountId) {
     const country = ISO[a.country];
     if (!country) throw new HttpsError("failed-precondition", "Stripe can't pay out to your country yet. Caravan will pay you with your chosen payout method instead.");
@@ -246,7 +252,7 @@ export const connectPayouts = onCall(async req => {
         ...(country === "US" ? {} : { tos_acceptance: { service_agreement: "recipient" } }),
         metadata: { uid },
       });
-      p = { accountId: acct.id, country, payoutsEnabled: false, createdAt: now() };
+      p = { accountId: acct.id, country, payoutsEnabled: false, mode: MODE, createdAt: now() };
       await ref.set(p);
     } catch (e) {
       console.warn("connect create", country, e?.message);
@@ -262,7 +268,7 @@ export const connectPayouts = onCall(async req => {
 export const payoutStatus = onCall(async req => {
   const uid = uidOf(req), ref = db.doc(`payouts/${uid}`);
   const p = (await ref.get()).data();
-  if (!p?.accountId) return { status: p?.unsupported ? "unsupported" : "none" };
+  if (!p?.accountId || !sameMode(p)) return { status: p?.unsupported ? "unsupported" : "none" };
   const acct = await (await stripe()).accounts.retrieve(p.accountId);
   const enabled = !!(acct.payouts_enabled || acct.capabilities?.transfers === "active");
   await ref.update({ payoutsEnabled: enabled, checkedAt: now() });

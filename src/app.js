@@ -112,7 +112,7 @@ const Store = (() => {
 })();
 
 /* ================= state ================= */
-const COLLS = ["agents","clients","tasks","applications","reviews","threads","hours","ledger"];
+const COLLS = ["agents","clients","tasks","applications","reviews","threads","hours","ledger","verifications","credentials"];
 const S = Object.fromEntries(COLLS.map(c => [c, []]));
 let UID = "me", READY = false, USER = null;
 const NEXT_KEY = "caravan:next";
@@ -454,8 +454,8 @@ const closeMenu = () => { hdr.classList.remove("open"); menuBtn.setAttribute("ar
 
 function navItems(){
   const r = role();
-  if (r === "client") return [["home","Home"],["agents","Find agents"],["tasks","My tasks"],["myagents","My agents"],["messages","Messages"],["payments","Payments"],["pricing","Pricing"]];
-  if (r === "agent") return [["home","Home"],["tasks","Find work"],["work","My work"],["agents","Agents"],["messages","Messages"],["payments","Earnings"],["pricing","Pricing"]];
+  if (r === "client") return [["home","Home"],["agents","Find agents"],["tasks","My tasks"],["myagents","My agents"],["messages","Messages"],["payments","Payments"],["pricing","Pricing"], ...(ADMIN ? [["admin","Admin"]] : [])];
+  if (r === "agent") return [["home","Home"],["tasks","Find work"],["work","My work"],["agents","Agents"],["messages","Messages"],["payments","Earnings"],["verify","Verification"], ...(ADMIN ? [["admin","Admin"]] : [])];
   return [["home","Home"],["how","How it works"],["agents","Find agents"],["tasks","Open tasks"],["pricing","Pricing"]];
 }
 function renderNav(){
@@ -472,7 +472,7 @@ function renderNav(){
 $$("[data-act-as]").forEach(b => b.onclick = () => { ACT = b.dataset.actAs; try { localStorage.setItem("caravan:act", ACT); } catch(e) {} renderNav(); if (!STATIC.includes(current.view)) mountApp(); });
 
 let unmount = null;
-const NEEDS_ACCOUNT = ["register","post","messages","payments","myagents","profile"];
+const NEEDS_ACCOUNT = ["register","post","messages","payments","myagents","profile","verify","admin"];
 // Each page gets its own address (/agents, /task/<id>…) so the browser's back and forward arrows work.
 function urlFor(view, params){
   if (view === "home") return "/";
@@ -526,6 +526,8 @@ document.addEventListener("click", e => {
     approve: () => approveHours(id), reject: () => rejectHours(id), connect: () => connectPayouts(a),
     screenshare: () => startShare(id), screenaccept: () => { const s = SESSIONS.find(x => x.id === id); if (s) startShare(s.taskId, id); },
     screenrequest: () => requestShare(id), screenview: () => viewShare(id), screenend: () => endSession(id),
+    credadd: () => dlgCredential(), credit: () => dlgCredential(id), creddel: () => removeCredential(id), skilltest: () => dlgSkillTest(id),
+    admreload: () => { ADM.rows = null; mountApp(); }, admverify: () => reviewCred(id, "verified", a), admreject: () => reviewCred(id, "rejected", a),
     complete: () => completeTask(id), end: () => dlgEnd(id), review: () => dlgReview(id),
     rehire: () => { if (requireRole("client", "rehire agents")) go("post", {direct:id}); },
     method: async () => { PREFS.method = id; await savePrefs(); refresh(); },
@@ -564,6 +566,7 @@ function agentCard(a, extra=""){
       ${r === "client" && !mine ? `<button class="iconbtn" data-act="fav" data-id="${esc(a.id)}" aria-pressed="${fav}" aria-label="${fav ? "Remove from" : "Add to"} favorites">★</button>` : ""}</div>
     <div class="meta"><span>${ratingTxt(st)}</span><span>${st.jobs} jobs</span><span class="price">${money(a.rate)}/hr</span></div>
     <div class="taglist">${skills.slice(0,3).map(s => `<span class="tag">${esc(s)}</span>`).join("")}${skills.length > 3 ? `<span class="tag">+${skills.length - 3}</span>` : ""}</div>
+    ${verifBadges(a.id)}
     <div class="muted sm">${esc((a.languages || []).join(", "))}</div>
     ${extra}
     <div class="cardfoot"><button class="btn ghost xs" data-go="agent" data-id="${esc(a.id)}">View profile</button>${!mine ? `<button class="btn ghost xs" data-act="msg" data-id="${esc(a.id)}">Message</button>${r !== "agent" ? `<button class="btn primary xs" data-act="hire" data-id="${esc(a.id)}">Hire</button>` : ""}` : ""}</div>
@@ -571,7 +574,7 @@ function agentCard(a, extra=""){
 }
 
 /* ---- directory ---- */
-const F = {q:"", skill:"", lang:"", max:"", country:"", sort:"rating", favs:false};
+const F = {q:"", skill:"", lang:"", max:"", country:"", sort:"rating", favs:false, ver:""};
 V.agents = {
   mount(el){
     const countries = [...new Set(S.agents.map(a => a.country))].sort();
@@ -582,13 +585,14 @@ V.agents = {
         <select id="f_lang" aria-label="Language"><option value="">Any language</option>${LANGS.map(t => `<option${t === F.lang ? " selected" : ""}>${t}</option>`).join("")}</select>
         <select id="f_country" aria-label="Country"><option value="">Any country</option>${countries.map(t => `<option${t === F.country ? " selected" : ""}>${esc(t)}</option>`).join("")}</select>
         <div class="money"><input type="number" id="f_max" min="1" step="0.5" placeholder="Max rate" value="${esc(F.max)}" aria-label="Maximum hourly rate"></div>
+        <select id="f_ver" aria-label="Verification"><option value="">Any verification</option><option value="any"${F.ver === "any" ? " selected" : ""}>Verified agents only</option><option value="id"${F.ver === "id" ? " selected" : ""}>ID verified</option>${FIELDS.map(f => `<option value="${f.id}"${F.ver === f.id ? " selected" : ""}>Verified in ${esc(f.name)}</option>`).join("")}</select>
         <select id="f_sort" aria-label="Sort by"><option value="rating">Top rated</option><option value="rate">Lowest rate</option><option value="jobs">Most jobs</option><option value="new">Newest</option></select>
       </div>
       ${role() === "client" ? `<label class="check sm" style="margin:0 0 20px"><input type="checkbox" id="f_favs"${F.favs ? " checked" : ""}> Favorites only</label>` : '<div style="height:12px"></div>'}
       <div id="agentList"></div></div>`;
     $("#f_sort").value = F.sort;
     const bind = (id, k, ev="input") => { const i = $(id); if (i) i.addEventListener(ev, () => { F[k] = i.type === "checkbox" ? i.checked : i.value; this.update(); }); };
-    bind("#f_q","q"); bind("#f_skill","skill","change"); bind("#f_lang","lang","change"); bind("#f_country","country","change"); bind("#f_max","max"); bind("#f_sort","sort","change"); bind("#f_favs","favs","change");
+    bind("#f_q","q"); bind("#f_skill","skill","change"); bind("#f_lang","lang","change"); bind("#f_country","country","change"); bind("#f_max","max"); bind("#f_sort","sort","change"); bind("#f_favs","favs","change"); bind("#f_ver","ver","change");
     this.update();
   },
   update(){
@@ -600,7 +604,8 @@ V.agents = {
       .filter(a => !F.lang || (a.languages || []).includes(F.lang))
       .filter(a => !F.country || a.country === F.country)
       .filter(a => !F.max || +a.rate <= +F.max)
-      .filter(a => !F.favs || PREFS.favorites.includes(a.id));
+      .filter(a => !F.favs || PREFS.favorites.includes(a.id))
+      .filter(a => !F.ver || verifiedFor(a.id, F.ver));
     const st = Object.fromEntries(list.map(a => [a.id, agentStats(a.id)]));
     const sorters = {rating:(x,y) => (st[y.id].avg - st[x.id].avg) || (st[y.id].count - st[x.id].count), rate:(x,y) => x.rate - y.rate, jobs:(x,y) => st[y.id].jobs - st[x.id].jobs, new:(x,y) => String(y.createdAt).localeCompare(String(x.createdAt))};
     list.sort(sorters[F.sort] || sorters.rating);
@@ -628,6 +633,7 @@ V.agent = { mount(el, p){
           <dt>Availability</dt><dd>${esc(a.hoursPerWeek)} hrs/week${(a.shifts || []).length ? ", " + esc(a.shifts.join(", ").toLowerCase()) : ""}</dd>
           <dt>Equipment</dt><dd>${esc(a.equipment || "—")}</dd>
         </dl></div>
+      ${verifCard(a.id)}
       <div class="card"><h3>Reviews</h3>${st.reviews.length ? st.reviews.map(rv => `<div style="border-top:1px solid var(--line);padding-top:12px"><div class="meta"><span class="stars" aria-label="${rv.rating} out of 5">${"★".repeat(rv.rating)}<span style="color:var(--line2)">${"★".repeat(5 - rv.rating)}</span></span><span>${esc(rv.clientName || "Client")}</span><span class="muted">${fmtDate(rv.at)}</span></div>${rv.text ? `<p class="desc" style="margin-top:6px">${esc(rv.text)}</p>` : ""}</div>`).join("") : '<p class="muted">No reviews yet.</p>'}</div>
     </div>
     <div class="stack"><div class="card">
@@ -787,6 +793,156 @@ V.task = { mount(el, p){
     <div class="cols"><div class="stack"><div class="card"><h3>Description</h3><p class="desc">${esc(t.description) || '<span class="muted">No description.</span>'}</p></div>${money_}${hiring}</div><div class="stack">${side}${screenCard(t, isClient, isAgent)}</div></div></div>`;
 }};
 
+
+
+/* ================= verification =================
+ * Agents prove themselves three ways, shown as badges to clients:
+ *  - ID verified: Stripe checked their identity when they set up payouts (live mode).
+ *  - Credentials: certifications, licences, degrees… submitted by the agent, reviewed by a Caravan admin.
+ *  - Skill tests: short field-specific tests graded on the server (functions/skilltests.js).
+ * The public summary lives in verifications/{uid}, written only by the server.
+ */
+const FIELDS = [
+  {id:"bookkeeping", name:"Bookkeeping & accounting", eg:"QuickBooks or Xero certification, accounting degree, CPA/ACCA"},
+  {id:"admin", name:"Executive & admin support", eg:"Virtual assistant certificate, references from past employers"},
+  {id:"customer", name:"Customer support", eg:"Zendesk or HubSpot certification, call-centre experience"},
+  {id:"data", name:"Data entry & spreadsheets", eg:"Microsoft Office Specialist (Excel), Google Sheets certificate"},
+  {id:"writing", name:"Writing & editing", eg:"Published samples, journalism or English degree"},
+  {id:"translation", name:"Translation", eg:"ATA or CIOL certification, DELE, DELF, HSK, JLPT"},
+  {id:"marketing", name:"Social media & marketing", eg:"Meta Blueprint, Google Ads, HubSpot Inbound"},
+  {id:"it", name:"IT support", eg:"CompTIA A+, Google IT Support certificate, Microsoft certifications"},
+  {id:"design", name:"Design", eg:"Portfolio (Behance, Dribbble), Adobe Certified Professional"},
+  {id:"medical", name:"Medical admin & billing", eg:"CPC or CMAA certification, HIPAA training"},
+  {id:"legal", name:"Legal assistance", eg:"Paralegal certificate, NALA CP"},
+  {id:"realestate", name:"Real estate admin", eg:"Real estate licence, transaction coordinator certificate"},
+];
+const FIELD = Object.fromEntries(FIELDS.map(f => [f.id, f]));
+const TEST_FIELDS = ["bookkeeping","data","writing","customer","it","admin"];
+const CRED_KINDS = ["Certification","Licence","Degree or diploma","Language test","Portfolio or work sample","Employer reference"];
+let ADMIN = false;
+async function checkAdmin(){
+  ADMIN = false;
+  if (!FB.enabled || !USER) return;
+  try { ADMIN = !!(await FB.call("amIAdmin", {})).admin; } catch(e) {}
+  renderNav();
+}
+const verifOf = id => S.verifications.find(v => v.id === id) || {};
+function verifiedFor(id, what){
+  const v = verifOf(id), creds = v.creds || [], tests = v.tests || {};
+  if (what === "id") return !!v.idVerified;
+  if (what === "any") return !!v.idVerified || creds.length > 0 || Object.values(tests).some(t => t.passed);
+  return creds.some(c => c.field === what) || !!tests[what]?.passed;
+}
+function verifBadges(id){
+  const v = verifOf(id), creds = v.creds || [], tests = Object.entries(v.tests || {}).filter(([, t]) => t.passed);
+  if (!v.idVerified && !creds.length && !tests.length) return "";
+  return `<div class="taglist">${v.idVerified ? '<span class="tag ver">✓ ID verified</span>' : ""}${creds.length ? `<span class="tag ver">✓ ${creds.length} credential${creds.length > 1 ? "s" : ""}</span>` : ""}${tests.slice(0, 2).map(([f]) => `<span class="tag ver">Tested: ${esc(FIELD[f]?.name || f)}</span>`).join("")}</div>`;
+}
+function verifCard(id){
+  const v = verifOf(id), creds = v.creds || [], tests = Object.entries(v.tests || {}).filter(([, t]) => t.passed);
+  const rows = [
+    v.idVerified ? `<div class="meta"><span class="tag ver">✓ ID verified</span><span class="muted sm">Identity checked by Stripe</span></div>` : "",
+    ...creds.map(c => `<div class="meta"><span class="tag ver">✓ ${esc(c.kind)}</span><span><b>${esc(c.title)}</b>${c.issuer ? `, ${esc(c.issuer)}` : ""}</span><span class="muted sm">${esc(FIELD[c.field]?.name || c.field)}</span></div>`),
+    ...tests.map(([f, t]) => `<div class="meta"><span class="tag ver">Skill test passed</span><span>${esc(FIELD[f]?.name || f)}</span><span class="muted sm">${t.score}/${t.total}</span></div>`),
+  ].filter(Boolean);
+  return `<div class="card"><h3>Verification</h3>${rows.length ? `<div class="stack" style="gap:8px">${rows.join("")}</div><p class="muted xs" style="margin:10px 0 0">Credentials are checked by Caravan before they appear here. Skill tests are timed and graded by Caravan.</p>` : '<p class="muted sm" style="margin:0">Nothing verified yet.</p>'}</div>`;
+}
+
+// Agent's own verification page.
+V.verify = { mount(el){
+  const me = meAgent();
+  if (!me) { el.innerHTML = `<div class="wrap page">${emptyBox("Create an agent profile to get verified.", `<button class="btn primary sm" data-go="register" data-role="agent">Register as an agent</button>`)}</div>`; return; }
+  const v = verifOf(UID), mine = S.credentials.filter(c => c.agentId === UID).sort((a,b) => String(b.submittedAt).localeCompare(String(a.submittedAt)));
+  const st = {pending:"Under review", verified:"Verified", rejected:"Not accepted"};
+  el.innerHTML = `<div class="wrap page">${head("Verification", "Verified agents get more offers. Clients can filter the directory to see only verified agents.")}
+    <div class="cols"><div class="stack">
+      <div class="card"><h3>Credentials</h3><p class="muted sm">Add certifications, licences, degrees or work samples for the fields you work in. Include a link or ID number so Caravan can check it. Most reviews take one to two business days.</p>
+        ${mine.length ? `<div class="tablewrap"><table class="t"><thead><tr><th>Credential</th><th>Field</th><th>Status</th><th></th></tr></thead><tbody>${mine.map(c => `<tr><td><b>${esc(c.title)}</b><div class="muted xs">${esc(c.kind)}${c.issuer ? ", " + esc(c.issuer) : ""}</div></td><td class="sm">${esc(FIELD[c.field]?.name || c.field)}</td><td><span class="pill ${c.status === "verified" ? "completed" : c.status === "rejected" ? "cancelled" : "offered"}">${st[c.status] || esc(c.status)}</span>${c.status === "rejected" && c.note ? `<div class="muted xs">${esc(c.note)}</div>` : ""}</td><td><div class="btnrow" style="flex-wrap:nowrap">${c.status !== "verified" ? `<button class="btn ghost xs" data-act="credit" data-id="${esc(c.id)}">Edit</button>` : ""}<button class="btn ghost xs" data-act="creddel" data-id="${esc(c.id)}">Remove</button></div></td></tr>`).join("")}</tbody></table></div>` : ""}
+        <button class="btn primary sm" data-act="credadd">Add a credential</button></div>
+      <div class="card"><h3>Skill tests</h3><p class="muted sm">8 questions, 30 minutes, pass with 6 right. If you don't pass, you can retake a test after 24 hours.</p>
+        <div class="stack" style="gap:8px">${TEST_FIELDS.map(f => { const t = (v.tests || {})[f]; return `<div class="meta" style="padding:8px 0;border-top:1px solid var(--line)"><span>${esc(FIELD[f].name)}</span>${t?.passed ? `<span class="tag ver">Passed ${t.score}/${t.total}</span>` : `<button class="btn ghost xs" style="margin-left:auto" data-act="skilltest" data-id="${f}">Take test</button>`}</div>`; }).join("")}</div></div>
+    </div><div class="stack">
+      <div class="card"><h3>Identity</h3>${v.idVerified ? '<p class="sm" style="margin:0"><span class="tag ver">✓ ID verified</span> Stripe checked your identity.</p>' : `<p class="muted sm">Your identity is checked by Stripe when you set up payouts. Once that's done, the ✓ ID verified badge appears on your profile.</p>${PAY_LIVE ? `<button class="btn primary sm" data-go="payments">Set up payouts</button>` : ""}`}</div>
+      ${verifCard(UID)}
+    </div></div></div>`;
+}};
+function dlgCredential(id){
+  const c = id ? S.credentials.find(x => x.id === id) : {};
+  openDlg(`<h3 id="dlgTitle">${id ? "Edit credential" : "Add a credential"}</h3><p>Caravan checks each credential before it shows on your profile. Adding false credentials gets your account removed.</p>
+    <div class="fields">
+      <div><label for="cr_field">Field</label><select id="cr_field">${FIELDS.map(f => `<option value="${f.id}"${c.field === f.id ? " selected" : ""}>${esc(f.name)}</option>`).join("")}</select><div class="hint" id="cr_eg"></div></div>
+      <div><label for="cr_kind">Type</label><select id="cr_kind">${CRED_KINDS.map(k => `<option${c.kind === k ? " selected" : ""}>${k}</option>`).join("")}</select></div>
+      <div class="full"><label for="cr_title">Name of the credential</label><input type="text" id="cr_title" maxlength="120" value="${esc(c.title || "")}" placeholder="e.g. QuickBooks Online Certified ProAdvisor"></div>
+      <div><label for="cr_issuer">Issued by</label><input type="text" id="cr_issuer" maxlength="120" value="${esc(c.issuer || "")}" placeholder="e.g. Intuit"></div>
+      <div><label for="cr_number">Credential or licence number</label><input type="text" id="cr_number" maxlength="80" value="${esc(c.number || "")}"></div>
+      <div class="full"><label for="cr_url">Link where it can be checked</label><input type="url" id="cr_url" maxlength="400" value="${esc(c.url || "")}" placeholder="https://"><div class="hint">A verification page, certificate link, portfolio or LinkedIn post.</div></div>
+      <div class="full"><label for="cr_details">Anything else we should know (optional)</label><textarea id="cr_details" maxlength="1000">${esc(c.details || "")}</textarea></div>
+      <p class="full muted xs" id="cr_err" role="alert"></p>
+    </div>
+    <div class="dlgactions"><button class="btn ghost" data-close>Cancel</button><button class="btn primary" data-ok>Submit for review</button></div>`, el => {
+      const eg = () => { $("#cr_eg", el).textContent = "For example: " + FIELD[$("#cr_field", el).value].eg; };
+      $("#cr_field", el).onchange = eg; eg();
+      $("[data-ok]", el).onclick = async e => {
+        const val = k => $("#cr_" + k, el).value.trim();
+        if (!val("title")) { $("#cr_title", el).focus(); return; }
+        if (!val("url") && !val("number")) { $("#cr_err", el).textContent = "Add a link or a credential number so we can check it."; return; }
+        if (val("url") && !/^https?:\/\//i.test(val("url"))) { $("#cr_err", el).textContent = "The link should start with https://"; return; }
+        e.target.disabled = true;
+        try {
+          await Store.set(`credentials/${id || rid()}`, {agentId:UID, field:val("field"), kind:val("kind"), title:val("title"), issuer:val("issuer"), number:val("number"), url:val("url"), details:val("details"), status:"pending", submittedAt:now()});
+          dlg.close();
+        } catch(err) { e.target.disabled = false; $("#cr_err", el).textContent = "Couldn't save. Check the fields and try again."; }
+      };
+    });
+}
+async function removeCredential(id){
+  if (!await confirmDlg("Remove this credential?", "It will no longer show on your profile.", "Remove", true)) return;
+  if (FB.enabled) await FB.call("deleteCredential", {id}).catch(e => infoDlg("Couldn't remove it", esc(payErr(e))));
+  else await Store.del(`credentials/${id}`);
+}
+async function dlgSkillTest(field){
+  if (!FB.enabled) { infoDlg("Skill tests need an account", "Skill tests are graded by Caravan's server, so they only work on the live site."); return; }
+  let t;
+  try { t = await FB.call("startSkillTest", {field}); } catch(e) { infoDlg("Can't start the test", esc(payErr(e))); return; }
+  const started = Date.now();
+  openDlg(`<h3 id="dlgTitle">${esc(t.name)} test</h3><p>${t.total} questions. Pass with ${t.pass} right. You have 30 minutes. <span class="muted" id="sk_time"></span></p>
+    <div class="stack" style="gap:14px;max-height:55vh;overflow:auto">${t.questions.map((q, i) => `<fieldset style="border:1px solid var(--line);border-radius:12px;padding:12px"><legend class="sm"><b>${i + 1}.</b> ${esc(q.q)}</legend>${q.o.map((o, j) => `<label class="check sm" style="display:flex;margin:6px 0"><input type="radio" name="sk${i}" value="${j}"> ${esc(o)}</label>`).join("")}</fieldset>`).join("")}</div>
+    <p class="muted xs" id="sk_err" role="alert"></p>
+    <div class="dlgactions"><button class="btn ghost" data-close>Cancel</button><button class="btn primary" data-ok>Submit answers</button></div>`, el => {
+      const tick = setInterval(() => { const left = 30 * 60 - Math.round((Date.now() - started) / 1000); const te = $("#sk_time", el); if (!te || !dlg.open) { clearInterval(tick); return; } te.textContent = left > 0 ? `${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")} left` : "Time's up"; }, 1000);
+      $("[data-ok]", el).onclick = async e => {
+        const answers = t.questions.map((_, i) => { const c = $(`input[name=sk${i}]:checked`, el); return c ? +c.value : -1; });
+        if (answers.includes(-1) && !await new Promise(r => { $("#sk_err", el).textContent = "Some questions are unanswered. Click Submit again to send anyway."; e.target.onclick = () => r(true); })) return;
+        e.target.disabled = true; clearInterval(tick);
+        try {
+          const r = await FB.call("submitSkillTest", {field, answers});
+          infoDlg(r.passed ? "You passed" : "Not this time", r.passed ? `You got ${r.score} of ${r.total} right. The badge is now on your profile.` : `You got ${r.score} of ${r.total} right, and you need ${r.pass}. You can try again in 24 hours.`);
+        } catch(err) { infoDlg("Couldn't submit the test", esc(payErr(err))); }
+      };
+    });
+}
+
+// Admin: review submitted credentials.
+const ADM = {rows:null, err:""};
+V.admin = { mount(el){
+  if (!ADMIN) { el.innerHTML = `<div class="wrap page">${emptyBox("This page is for Caravan admins.")}</div>`; return; }
+  if (ADM.rows === null) { ADM.rows = []; loadPending(); }
+  el.innerHTML = `<div class="wrap page">${head("Credential reviews", "Check each credential at its source before verifying it. Verified credentials appear on the agent's public profile.", `<button class="btn ghost sm" data-act="admreload">Refresh</button>`)}
+    ${ADM.err ? `<div class="banner">${esc(ADM.err)}</div>` : ""}
+    ${ADM.rows.length ? `<div class="stack">${ADM.rows.map(c => `<div class="card"><div class="meta"><b>${esc(c.title)}</b><span class="tag">${esc(c.kind)}</span><span class="muted sm">${esc(FIELD[c.field]?.name || c.field)}</span><span class="muted sm" style="margin-left:auto">${fmtDate(c.submittedAt)}</span></div>
+      <dl class="dl" style="grid-template-columns:140px 1fr;margin:8px 0"><dt>Agent</dt><dd><button class="link" data-go="agent" data-id="${esc(c.agentId)}">${esc(c.agentName || c.agentId)}</button> <span class="muted">${esc(c.agentCountry)}</span></dd><dt>Issued by</dt><dd>${esc(c.issuer || "—")}</dd><dt>Number</dt><dd>${esc(c.number || "—")}</dd><dt>Link</dt><dd>${c.url ? `<a class="link" href="${esc(c.url)}" target="_blank" rel="noopener noreferrer nofollow">${esc(c.url)}</a>` : "—"}</dd>${c.details ? `<dt>Notes</dt><dd>${esc(c.details)}</dd>` : ""}</dl>
+      <div class="btnrow"><input type="text" id="note_${esc(c.id)}" placeholder="Note to the agent (shown if rejected)" style="flex:1;min-width:200px"><button class="btn primary sm" data-act="admverify" data-id="${esc(c.id)}">Verify</button><button class="btn danger sm" data-act="admreject" data-id="${esc(c.id)}">Reject</button></div></div>`).join("")}</div>` : emptyBox("No credentials waiting for review.")}</div>`;
+}};
+async function loadPending(){
+  try { ADM.rows = (await FB.call("listPendingCredentials", {})).rows; ADM.err = ""; } catch(e) { ADM.err = payErr(e); }
+  if (current.view === "admin") mountApp();
+}
+async function reviewCred(id, decision, btn){
+  btn.disabled = true;
+  const note = $("#note_" + CSS.escape(id))?.value.trim() || "";
+  try { await FB.call("reviewCredential", {id, decision, note}); ADM.rows = ADM.rows.filter(r => r.id !== id); mountApp(); }
+  catch(e) { btn.disabled = false; infoDlg("Couldn't save the review", esc(payErr(e))); }
+}
 
 /* ================= screen sharing =================
  * A client shares their screen with the agent on an active task, peer to peer over WebRTC.
@@ -1304,7 +1460,7 @@ let refreshQueued = false;
 function onData(){ if (refreshQueued) return; refreshQueued = true; requestAnimationFrame(() => { refreshQueued = false; renderNav(); refresh(); }); }
 // With Firebase, threads, applications, hours and ledger rows are private to the
 // people involved, so they are read through one query per role and merged.
-const SCOPED = {threads:[["participants","array-contains"]], applications:[["clientId","=="],["agentId","=="]], hours:[["clientId","=="],["agentId","=="]], ledger:[["clientId","=="],["agentId","=="]]};
+const SCOPED = {credentials:[["agentId","=="]], threads:[["participants","array-contains"]], applications:[["clientId","=="],["agentId","=="]], hours:[["clientId","=="],["agentId","=="]], ledger:[["clientId","=="],["agentId","=="]]};
 const SHOW_SAMPLES = import.meta.env.VITE_SHOW_SAMPLE_AGENTS !== "false";
 function withSamples(c, list){
   if (Store.mode !== "shared" || !SHOW_SAMPLES) return list;
@@ -1347,6 +1503,7 @@ function setUser(u){
   watchScoped();
   if (SC.id) teardown();
   watchSessions();
+  checkAdmin();
   renderNav();
 }
 // After signing in, carry on to whatever the visitor was trying to do.

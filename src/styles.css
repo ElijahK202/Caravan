@@ -286,3 +286,4 @@ footer .wrap{display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap;
 .sview video{flex:1;min-height:0;width:100%;object-fit:contain;background:#000;border-radius:12px}
 .slog{font-size:13px;color:var(--ink2);border-top:1px solid var(--line);padding-top:8px;margin-top:8px}
 .slog div{display:flex;justify-content:space-between;gap:8px;padding:3px 0}
+.tag.ver{background:color-mix(in srgb,var(--ok) 14%,transparent);border-color:color-mix(in srgb,var(--ok) 45%,transparent);color:var(--ok)}

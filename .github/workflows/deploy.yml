@@ -45,12 +45,14 @@ jobs:
           SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
           STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
           STRIPE_WEBHOOK_SECRET: ${{ secrets.STRIPE_WEBHOOK_SECRET }}
+          ADMIN_EMAILS: ${{ secrets.ADMIN_EMAILS }}
         run: |
           printf '%s' "$SERVICE_ACCOUNT" > "$RUNNER_TEMP/sa.json"
           GOOGLE_APPLICATION_CREDENTIALS="$RUNNER_TEMP/sa.json" node scripts/enable-apis.mjs caravan-6717f cloudbilling.googleapis.com
           (cd functions && npm ci)
           printf 'STRIPE_SECRET_KEY=%s\n' "$STRIPE_SECRET_KEY" > functions/.env
           if [ -n "$STRIPE_WEBHOOK_SECRET" ]; then printf 'STRIPE_WEBHOOK_SECRET=%s\n' "$STRIPE_WEBHOOK_SECRET" >> functions/.env; fi
+          if [ -n "$ADMIN_EMAILS" ]; then printf 'ADMIN_EMAILS=%s\n' "$ADMIN_EMAILS" >> functions/.env; fi
           GOOGLE_APPLICATION_CREDENTIALS="$RUNNER_TEMP/sa.json" npx -y firebase-tools@14 deploy --only functions --project caravan-6717f --force --non-interactive
           rm -f "$RUNNER_TEMP/sa.json" functions/.env
 

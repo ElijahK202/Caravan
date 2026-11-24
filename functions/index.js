@@ -10,6 +10,7 @@ import { getFirestore, FieldValue } from "firebase-admin/firestore";
 import { onCall, onRequest, HttpsError } from "firebase-functions/v2/https";
 import { setGlobalOptions } from "firebase-functions/v2";
 import Stripe from "stripe";
+import { TESTS, makeTest, PASS_MARK, QUESTIONS_PER_TEST } from "./skilltests.js";
 
 initializeApp();
 setGlobalOptions({ region: "us-central1", maxInstances: 10 });
@@ -272,6 +273,8 @@ export const payoutStatus = onCall(async req => {
   const acct = await (await stripe()).accounts.retrieve(p.accountId);
   const enabled = !!(acct.payouts_enabled || acct.capabilities?.transfers === "active");
   await ref.update({ payoutsEnabled: enabled, checkedAt: now() });
+  // Stripe checks the agent's identity before enabling payouts, so this doubles as an ID badge.
+  if (enabled && MODE === "live") await db.doc(`verifications/${uid}`).set({ idVerified: true, idVerifiedAt: now() }, { merge: true });
   let paid = 0;
   if (enabled) {
     const owed = (await db.collection("hours").where("agentId", "==", uid).get()).docs
@@ -279,4 +282,77 @@ export const payoutStatus = onCall(async req => {
     for (const h of owed) if (await payHours(h) === "paid") paid++;
   }
   return { status: enabled ? "enabled" : "pending", paid };
+});
+
+/* ---------- verification: credentials (reviewed by an admin) and skill tests ---------- */
+// Admins are listed by email in the ADMIN_EMAILS environment variable (a GitHub secret), never in code.
+function isAdmin(req) {
+  const email = String(req.auth?.token?.email || "").toLowerCase();
+  const list = String(process.env.ADMIN_EMAILS || "").toLowerCase().split(",").map(x => x.trim()).filter(Boolean);
+  return !!email && req.auth.token.email_verified === true && list.includes(email);
+}
+function needAdmin(req) { uidOf(req); if (!isAdmin(req)) throw new HttpsError("permission-denied", "Admins only."); }
+
+// Public summary on verifications/{uid}: what the agent has proven, rebuilt from verified credentials.
+async function rebuildCredSummary(agentId) {
+  const creds = (await db.collection("credentials").where("agentId", "==", agentId).get()).docs
+    .map(d => d.data()).filter(c => c.status === "verified")
+    .map(c => ({ field: c.field, kind: c.kind, title: c.title, issuer: c.issuer || "", verifiedAt: c.reviewedAt || "" }));
+  await db.doc(`verifications/${agentId}`).set({ creds, updatedAt: now() }, { merge: true });
+}
+
+export const amIAdmin = onCall(async req => ({ admin: !!req.auth && isAdmin(req) }));
+
+export const listPendingCredentials = onCall(async req => {
+  needAdmin(req);
+  const snap = await db.collection("credentials").where("status", "==", "pending").get();
+  const rows = await Promise.all(snap.docs.map(async d => {
+    const c = d.data(), a = (await db.doc(`agents/${c.agentId}`).get()).data() || {};
+    return { id: d.id, ...c, agentName: a.name || "", agentCountry: a.country || "" };
+  }));
+  return { rows: rows.sort((x, y) => String(x.submittedAt).localeCompare(String(y.submittedAt))) };
+});
+
+export const reviewCredential = onCall(async req => {
+  needAdmin(req);
+  const ref = db.doc(`credentials/${String(req.data?.id || "")}`), decision = req.data?.decision;
+  if (!["verified", "rejected"].includes(decision)) throw new HttpsError("invalid-argument", "Choose verify or reject.");
+  const c = (await ref.get()).data();
+  if (!c) throw new HttpsError("not-found", "Credential not found.");
+  await ref.update({ status: decision, note: String(req.data?.note || "").slice(0, 500), reviewedAt: now(), reviewedBy: req.auth.uid });
+  await rebuildCredSummary(c.agentId);
+  return { ok: true };
+});
+
+export const deleteCredential = onCall(async req => {
+  const uid = uidOf(req), ref = db.doc(`credentials/${String(req.data?.id || "")}`);
+  const c = (await ref.get()).data();
+  if (!c || (c.agentId !== uid && !isAdmin(req))) throw new HttpsError("not-found", "Credential not found.");
+  await ref.delete();
+  await rebuildCredSummary(c.agentId);
+  return { ok: true };
+});
+
+const RETRY_HOURS = 24;
+export const startSkillTest = onCall(async req => {
+  const uid = uidOf(req), field = String(req.data?.field || "");
+  if (!TESTS[field]) throw new HttpsError("invalid-argument", "Unknown test.");
+  if (!(await db.doc(`agents/${uid}`).get()).exists) throw new HttpsError("failed-precondition", "Create an agent profile first.");
+  const ref = db.doc(`testAttempts/${uid}_${field}`), prev = (await ref.get()).data();
+  if (prev?.lastFailAt && Date.now() - new Date(prev.lastFailAt) < RETRY_HOURS * 3600e3)
+    throw new HttpsError("failed-precondition", `You can retake this test ${RETRY_HOURS} hours after your last attempt.`);
+  const { questions, key } = makeTest(field);
+  await ref.set({ uid, field, key, startedAt: now(), attempts: (prev?.attempts || 0) + 1, lastFailAt: prev?.lastFailAt || null });
+  return { name: TESTS[field].name, questions, pass: PASS_MARK, total: QUESTIONS_PER_TEST };
+});
+
+export const submitSkillTest = onCall(async req => {
+  const uid = uidOf(req), field = String(req.data?.field || ""), answers = req.data?.answers;
+  const ref = db.doc(`testAttempts/${uid}_${field}`), att = (await ref.get()).data();
+  if (!att?.key || !Array.isArray(answers)) throw new HttpsError("failed-precondition", "Start the test first.");
+  if (Date.now() - new Date(att.startedAt) > 30 * 60e3) { await ref.update({ key: null, lastFailAt: now() }); throw new HttpsError("deadline-exceeded", "The 30 minutes ran out. You can try again tomorrow."); }
+  const score = att.key.reduce((n, k, i) => n + (Number(answers[i]) === k ? 1 : 0), 0), passed = score >= PASS_MARK;
+  await ref.update({ key: null, finishedAt: now(), score, ...(passed ? {} : { lastFailAt: now() }) });
+  if (passed) await db.doc(`verifications/${uid}`).set({ tests: { [field]: { passed: true, score, total: att.key.length, at: now() } } }, { merge: true });
+  return { passed, score, total: att.key.length, pass: PASS_MARK };
 });

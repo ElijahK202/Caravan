@@ -524,6 +524,8 @@ document.addEventListener("click", e => {
     cancel: async () => { if (await confirmDlg("Cancel this task?", "Agents can no longer apply.", "Cancel task", true)) Store.update(`tasks/${id}`, {status:"cancelled"}); },
     fund: () => dlgFund(id), log: () => dlgLogHours(id, a.dataset.behalf === "1"),
     approve: () => approveHours(id), reject: () => rejectHours(id), connect: () => connectPayouts(a),
+    screenshare: () => startShare(id), screenaccept: () => { const s = SESSIONS.find(x => x.id === id); if (s) startShare(s.taskId, id); },
+    screenrequest: () => requestShare(id), screenview: () => viewShare(id), screenend: () => endSession(id),
     complete: () => completeTask(id), end: () => dlgEnd(id), review: () => dlgReview(id),
     rehire: () => { if (requireRole("client", "rehire agents")) go("post", {direct:id}); },
     method: async () => { PREFS.method = id; await savePrefs(); refresh(); },
@@ -782,8 +784,156 @@ V.task = { mount(el, p){
   el.innerHTML = `<div class="wrap page">${backBtn("tasks", r === "agent" ? "Find work" : "My tasks")}
     <div class="pagehead"><div><div class="meta" style="margin-bottom:8px">${pill(t.status)}<span>${esc(t.category)}</span><span class="muted">Posted ${fmtDate(t.createdAt)}</span></div><h2>${esc(t.title)}</h2></div><div class="btnrow">${actions}</div></div>
     ${banner ? `<div class="banner" style="margin-bottom:20px">${banner}</div>` : ""}
-    <div class="cols"><div class="stack"><div class="card"><h3>Description</h3><p class="desc">${esc(t.description) || '<span class="muted">No description.</span>'}</p></div>${money_}${hiring}</div><div class="stack">${side}</div></div></div>`;
+    <div class="cols"><div class="stack"><div class="card"><h3>Description</h3><p class="desc">${esc(t.description) || '<span class="muted">No description.</span>'}</p></div>${money_}${hiring}</div><div class="stack">${side}${screenCard(t, isClient, isAgent)}</div></div></div>`;
 }};
+
+
+/* ================= screen sharing =================
+ * A client shares their screen with the agent on an active task, peer to peer over WebRTC.
+ * Firestore (sessions/{id}) carries the offer, answer and ICE candidates and doubles as the
+ * session log. Only the client can share; ending it stops the capture on the client's own
+ * machine, so the agent loses the picture immediately whatever their browser does.
+ */
+const ICE = [{urls:["stun:stun.l.google.com:19302","stun:stun1.l.google.com:19302"]}];
+const SCREEN_OK = () => FB.enabled && !!navigator.mediaDevices?.getDisplayMedia;
+let SESSIONS = [], sessUnsub = null;
+const SC = {id:null, pc:null, stream:null, offs:[], role:null, pending:[], remoteSet:false, notice:""};
+const openSess = s => ["requested","waiting","live"].includes(s.status);
+function watchSessions(){
+  if (sessUnsub) { sessUnsub(); sessUnsub = null; }
+  SESSIONS = [];
+  if (!FB.enabled || !USER) { renderScreen(); return; }
+  sessUnsub = FB.screen.watchMine(UID, list => {
+    SESSIONS = list.sort((a,b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+    const mine = SC.id && SESSIONS.find(x => x.id === SC.id);
+    if (mine) onSessionChange(mine);
+    renderScreen(); onData();
+  });
+}
+const sessFor = taskId => SESSIONS.find(x => x.taskId === taskId && openSess(x));
+const sessWho = (s, uid) => uid === s.clientId ? short(clientById(s.clientId)?.name || "Client") : short(agentById(s.agentId)?.name || "Agent");
+const dur = (a, b) => { const m = Math.max(0, Math.round((new Date(b) - new Date(a)) / 60000)); return m < 1 ? "under a minute" : m < 60 ? `${m} min` : `${Math.floor(m / 60)} h ${m % 60} min`; };
+
+function newPeer(from){
+  const pc = new RTCPeerConnection({iceServers:ICE});
+  pc.onicecandidate = e => { if (e.candidate) FB.screen.addIce(SC.id, from, e.candidate.toJSON()).catch(() => {}); };
+  pc.onconnectionstatechange = () => { if (["failed"].includes(pc.connectionState)) { SC.notice = "The connection dropped. Try sharing again."; endSession(SC.id); } renderScreen(); };
+  SC.offs.push(FB.screen.watchIce(SC.id, (who, c) => {
+    if (who === from) return;
+    if (SC.remoteSet) pc.addIceCandidate(c).catch(() => {}); else SC.pending.push(c);
+  }));
+  return pc;
+}
+async function setRemote(desc){
+  await SC.pc.setRemoteDescription(desc); SC.remoteSet = true;
+  for (const c of SC.pending.splice(0)) SC.pc.addIceCandidate(c).catch(() => {});
+}
+function teardown(){
+  SC.offs.splice(0).forEach(f => { try { f(); } catch(e) {} });
+  if (SC.stream) SC.stream.getTracks().forEach(t => t.stop());
+  if (SC.pc) SC.pc.close();
+  Object.assign(SC, {id:null, pc:null, stream:null, role:null, pending:[], remoteSet:false});
+  const v = $("#screenView"); if (v) v.remove();
+  renderScreen();
+}
+
+// Client: start sharing (fresh, or in answer to the agent's request).
+async function startShare(taskId, requestId){
+  if (!SCREEN_OK()) { infoDlg("Screen sharing isn't available here", "Use Chrome, Edge, Firefox or Safari on a computer. Phones and tablets can't share their screen from a browser."); return; }
+  if (SC.id) { infoDlg("You're already sharing", "End the current session first."); return; }
+  const t = taskById(taskId);
+  let stream;
+  try { stream = await navigator.mediaDevices.getDisplayMedia({video:{frameRate:15}, audio:false}); }
+  catch(e) { return; } // picker closed
+  try {
+    const base = {status:"waiting", sharedAt:now()};
+    SC.id = requestId || await FB.screen.create({taskId, clientId:t.clientId, agentId:t.agentId, participants:[t.clientId, t.agentId], taskTitle:t.title, createdAt:now(), ...base});
+    if (requestId) await FB.screen.update(requestId, base);
+    Object.assign(SC, {stream, role:"sharer"});
+    SC.pc = newPeer("client");
+    stream.getTracks().forEach(tr => { SC.pc.addTrack(tr, stream); tr.onended = () => endSession(SC.id); }); // browser's own "Stop sharing"
+    const offer = await SC.pc.createOffer();
+    await SC.pc.setLocalDescription(offer);
+    await FB.screen.update(SC.id, {offer:{type:offer.type, sdp:offer.sdp}});
+    await postMessage(threadIdFor(t.clientId, t.agentId), `${short(meClient()?.name)} started sharing their screen for “${t.title}”.`, true).catch(() => {});
+  } catch(e) { console.warn("share", e); stream.getTracks().forEach(tr => tr.stop()); SC.notice = "Couldn't start screen sharing."; teardown(); }
+  renderScreen();
+}
+// Agent: join a waiting session and watch.
+async function viewShare(id){
+  const s = SESSIONS.find(x => x.id === id);
+  if (!s?.offer) return;
+  if (SC.id && SC.id !== id) teardown();
+  if (SC.id === id) { showViewer(s); return; }
+  Object.assign(SC, {id, role:"viewer"});
+  SC.pc = newPeer("agent");
+  SC.pc.ontrack = e => { SC.stream = e.streams[0]; const v = $("#screenView video"); if (v) v.srcObject = SC.stream; };
+  showViewer(s);
+  try {
+    await setRemote(s.offer);
+    const ans = await SC.pc.createAnswer();
+    await SC.pc.setLocalDescription(ans);
+    await FB.screen.update(id, {answer:{type:ans.type, sdp:ans.sdp}, status:"live", startedAt:now()});
+  } catch(e) { console.warn("view", e); SC.notice = "Couldn't connect to the shared screen."; teardown(); }
+}
+function onSessionChange(s){
+  if (s.status === "ended") {
+    if (SC.role === "viewer" && s.endedBy !== UID) SC.notice = `${sessWho(s, s.clientId)} ended the screen share.`;
+    teardown(); return;
+  }
+  if (SC.role === "sharer" && s.answer && !SC.remoteSet) setRemote(s.answer).catch(e => console.warn("answer", e));
+}
+async function endSession(id){
+  if (!id) return;
+  const s = SESSIONS.find(x => x.id === id);
+  if (SC.id === id) teardown();
+  if (s && openSess(s)) await FB.screen.update(id, {status:"ended", endedAt:now(), endedBy:UID}).catch(e => console.warn("end", e));
+}
+async function requestShare(taskId){
+  const t = taskById(taskId);
+  await FB.screen.create({taskId, clientId:t.clientId, agentId:t.agentId, participants:[t.clientId, t.agentId], taskTitle:t.title, status:"requested", createdAt:now()});
+  await postMessage(threadIdFor(t.clientId, t.agentId), `${short(meAgent()?.name)} asked to see your screen for “${t.title}”. You can accept or decline on the task page.`, true).catch(() => {});
+}
+function showViewer(s){
+  let v = $("#screenView");
+  if (!v) { v = document.createElement("div"); v.id = "screenView"; v.className = "sview"; v.setAttribute("role", "dialog"); v.setAttribute("aria-label", "Shared screen"); document.body.appendChild(v); }
+  v.innerHTML = `<header><span class="dot live" style="width:9px;height:9px;border-radius:50%;background:var(--err)"></span><b>${esc(sessWho(s, s.clientId))}'s screen</b><span class="muted sm">${esc(s.taskTitle || "")}</span><span style="flex:1"></span><button class="btn ghost sm" data-sfull>Full screen</button><button class="btn ghost sm" data-shide>Minimize</button><button class="btn danger solid sm" data-act="screenend" data-id="${esc(s.id)}">Leave</button></header><video autoplay playsinline muted></video>`;
+  const vid = $("video", v); if (SC.stream) vid.srcObject = SC.stream;
+  $("[data-sfull]", v).onclick = () => vid.requestFullscreen?.();
+  $("[data-shide]", v).onclick = () => { v.hidden = true; renderScreen(); };
+}
+// Floating bar: the client always sees that they're sharing and can end it from any page.
+function renderScreen(){
+  let bar = $("#screenBar");
+  const s = SC.id && SESSIONS.find(x => x.id === SC.id);
+  const waiting = !SC.id && SESSIONS.find(x => x.agentId === UID && x.status === "waiting" && x.offer);
+  const asked = !SC.id && SESSIONS.find(x => x.clientId === UID && x.status === "requested");
+  let html = "";
+  if (SC.role === "sharer") html = `<span class="dot${s?.status === "live" ? " live" : ""}"></span><span>${s?.status === "live" ? `<b>${esc(sessWho(s, s.agentId))}</b> is viewing your screen` : "Sharing your screen. Waiting for the agent to join…"}</span><button class="btn danger solid sm" data-act="screenend" data-id="${esc(SC.id)}">End session</button>`;
+  else if (SC.role === "viewer" && $("#screenView")?.hidden) html = `<span class="dot live"></span><span>Viewing ${esc(sessWho(s || {}, s?.clientId))}'s screen</span><button class="btn primary sm" data-sshow>Show</button><button class="btn ghost sm" data-act="screenend" data-id="${esc(SC.id)}">Leave</button>`;
+  else if (waiting) html = `<span class="dot"></span><span><b>${esc(sessWho(waiting, waiting.clientId))}</b> is sharing their screen</span><button class="btn primary sm" data-act="screenview" data-id="${esc(waiting.id)}">View screen</button>`;
+  else if (asked) html = `<span class="dot"></span><span><b>${esc(sessWho(asked, asked.agentId))}</b> asked to see your screen</span><button class="btn primary sm" data-act="screenaccept" data-id="${esc(asked.id)}">Share screen</button><button class="btn ghost sm" data-act="screenend" data-id="${esc(asked.id)}">Decline</button>`;
+  else if (SC.notice) { html = `<span>${esc(SC.notice)}</span><button class="btn ghost sm" data-sdismiss>OK</button>`; }
+  if (!html) { if (bar) bar.remove(); return; }
+  if (!bar) { bar = document.createElement("div"); bar.id = "screenBar"; bar.className = "sbar"; bar.setAttribute("role", "status"); document.body.appendChild(bar); }
+  bar.innerHTML = html;
+  const show = $("[data-sshow]", bar); if (show) show.onclick = () => { $("#screenView").hidden = false; renderScreen(); };
+  const ok = $("[data-sdismiss]", bar); if (ok) ok.onclick = () => { SC.notice = ""; renderScreen(); };
+}
+// Card on an active task's page.
+function screenCard(t, isClient, isAgent){
+  if (!FB.enabled || !(isClient || isAgent) || t.status !== "active") return "";
+  const open = sessFor(t.id), past = SESSIONS.filter(x => x.taskId === t.id && x.status === "ended" && x.startedAt).slice(0, 5);
+  let body;
+  if (isClient) body = open?.status === "requested" ? `<p class="muted sm">${esc(first2(t.agentName))} asked to see your screen.</p><div class="btnrow"><button class="btn primary sm" data-act="screenaccept" data-id="${esc(open.id)}">Share my screen</button><button class="btn ghost sm" data-act="screenend" data-id="${esc(open.id)}">Decline</button></div>`
+    : open ? `<p class="muted sm">${open.status === "live" ? `${esc(first2(t.agentName))} is viewing your screen.` : "Waiting for the agent to join."}</p><button class="btn danger solid sm" data-act="screenend" data-id="${esc(open.id)}">End session</button>`
+    : `<p class="muted sm">Let ${esc(first2(t.agentName))} see your screen so they can guide you. You pick a window or screen to share and can end it any time, which cuts them off immediately. They can't control your computer.</p><button class="btn primary sm" data-act="screenshare" data-id="${esc(t.id)}">Share my screen</button>`;
+  else body = open?.status === "requested" ? `<p class="muted sm">Waiting for the client to accept your request.</p><button class="btn ghost sm" data-act="screenend" data-id="${esc(open.id)}">Cancel request</button>`
+    : open?.offer ? `<p class="muted sm">The client is sharing their screen.</p><button class="btn primary sm" data-act="screenview" data-id="${esc(open.id)}">View screen</button>`
+    : `<p class="muted sm">Ask the client to share their screen when it's easier to see the problem. They decide what to share and can end it any time.</p><button class="btn primary sm" data-act="screenrequest" data-id="${esc(t.id)}">Ask to see screen</button>`;
+  return `<div class="card"><h3>Screen sharing</h3>${body}${past.length ? `<div class="slog"><b class="sm">Past sessions</b>${past.map(x => `<div><span>${fmtDate(x.startedAt)}</span><span>${dur(x.startedAt, x.endedAt)}${x.endedBy === x.clientId ? ", ended by client" : ""}</span></div>`).join("")}</div>` : ""}</div>`;
+}
+const first2 = n => String(n || "").split(" ")[0];
 
 /* ---- post a task ---- */
 V.post = { mount(el, p){
@@ -1195,6 +1345,8 @@ function setUser(u){
   if (USER?.email) $$("#c_email, #a_email").forEach(i => { if (!i.value) i.value = USER.email; });
   loadPrefs();
   watchScoped();
+  if (SC.id) teardown();
+  watchSessions();
   renderNav();
 }
 // After signing in, carry on to whatever the visitor was trying to do.

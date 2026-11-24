@@ -7,7 +7,7 @@ import {
 } from "firebase/auth";
 import {
   initializeFirestore, connectFirestoreEmulator, doc, getDoc, setDoc, updateDoc, deleteDoc,
-  collection, query, where, onSnapshot,
+  collection, query, where, onSnapshot, addDoc,
 } from "firebase/firestore";
 import { getFunctions, connectFunctionsEmulator, httpsCallable } from "firebase/functions";
 
@@ -100,3 +100,17 @@ export function makeDb() {
     },
   };
 }
+
+/**
+ * Screen-share sessions (see the screen module in app.js). The session doc carries the WebRTC
+ * offer and answer; ICE candidates go in its ice subcollection.
+ */
+export const screen = {
+  watchMine: (uid, cb) => onSnapshot(query(collection(fs, "sessions"), where("participants", "array-contains", uid)),
+    s => cb(s.docs.map(d => ({ id: d.id, ...d.data() }))), e => console.warn("sessions", e?.code)),
+  create: data => addDoc(collection(fs, "sessions"), data).then(r => r.id),
+  update: (id, data) => updateDoc(doc(fs, "sessions", id), data),
+  addIce: (id, from, c) => addDoc(collection(fs, "sessions", id, "ice"), { from, c: JSON.stringify(c) }),
+  watchIce: (id, cb) => onSnapshot(collection(fs, "sessions", id, "ice"),
+    s => s.docChanges().forEach(ch => { if (ch.type === "added") { const d = ch.doc.data(); cb(d.from, JSON.parse(d.c)); } })),
+};

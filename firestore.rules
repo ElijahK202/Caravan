@@ -96,6 +96,33 @@ service cloud.firestore {
         && isSample(request.resource.data.agentId);
     }
 
+    // Screen-share sessions between the client and agent on an active task (WebRTC signaling + log).
+    // Only the client shares (status 'waiting' with an offer); the agent may only ask ('requested'),
+    // answer ('live') or leave. Ended sessions are frozen as the log.
+    function sessParties(d) {
+      let t = task(d.taskId);
+      return t.status == 'active' && d.clientId == t.clientId && d.agentId == t.agentId
+        && d.participants == [d.clientId, d.agentId];
+    }
+    match /sessions/{sid} {
+      allow read: if signedIn() && me() in resource.data.participants;
+      allow create: if signedIn() && sessParties(request.resource.data)
+        && ((request.resource.data.status == 'waiting' && me() == request.resource.data.clientId)
+            || (request.resource.data.status == 'requested' && me() == request.resource.data.agentId));
+      allow update: if signedIn() && me() in resource.data.participants && resource.data.status != 'ended'
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['taskId', 'clientId', 'agentId', 'participants', 'createdAt'])
+        && (me() == resource.data.clientId
+            || (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['offer', 'sharedAt'])
+                && request.resource.data.status in ['live', 'ended', 'requested']
+                && (request.resource.data.status != 'live' || 'offer' in resource.data)));
+      match /ice/{cid} {
+        allow read: if signedIn() && me() in get(/databases/$(database)/documents/sessions/$(sid)).data.participants;
+        allow create: if signedIn() && me() in get(/databases/$(database)/documents/sessions/$(sid)).data.participants
+          && get(/databases/$(database)/documents/sessions/$(sid)).data.status != 'ended'
+          && request.resource.data.from == (me() == get(/databases/$(database)/documents/sessions/$(sid)).data.clientId ? 'client' : 'agent');
+      }
+    }
+
     // Stripe Checkout sessions and agent payout accounts: server-written only.
     match /payments/{sessionId} {
       allow read: if signedIn() && resource.data.clientId == me();
